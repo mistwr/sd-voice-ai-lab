@@ -1,0 +1,22 @@
+# Segredos — nunca fazer commit disto
+.env
+.env.local
+.env.*.local
+worker/.env
+worker/.env.local
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+
+# Python
+worker/venv/
+worker/__pycache__/
+worker/*.pyc
+worker/.pytest_cache/
+
+# Sistema
+.DS_Store
+*.log

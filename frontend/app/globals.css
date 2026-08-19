@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@600;700;800&display=swap");
+
+body {
+  background: #07070b;
+  color: #e8e8f0;
+  font-family: "Space Mono", monospace;
+}
+
+h1, h2, h3, .display {
+  font-family: "Syne", sans-serif;
+}
+
+.card {
+  background: #101018;
+  border: 1px solid #1f1f2b;
+  border-radius: 14px;
+}
+
+.accent {
+  color: #a0ffb8;
+}
+
+.btn-primary {
+  background: #a0ffb8;
+  color: #07070b;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 0.75rem 1.5rem;
+  transition: opacity 0.15s ease;
+}
+.btn-primary:hover {
+  opacity: 0.85;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background: transparent;
+  border: 1px solid #ff6b6b;
+  color: #ff6b6b;
+  border-radius: 10px;
+  padding: 0.6rem 1.2rem;
+  font-weight: 700;
+}
+
+input, textarea, select {
+  background: #07070b;
+  border: 1px solid #1f1f2b;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  color: #e8e8f0;
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #a0ffb8;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  border: 1px solid #1f1f2b;
+}
