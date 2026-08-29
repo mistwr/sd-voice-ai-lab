@@ -6,9 +6,12 @@ import android.telecom.InCallService
 import org.json.JSONObject
 
 class SdInCallService : InCallService() {
+    @Volatile private var probedThisCall = false
+
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
         currentCall = call
+        probedThisCall = false
         call.registerCallback(callback)
         reportState(call.state)
     }
@@ -17,6 +20,7 @@ class SdInCallService : InCallService() {
         call.unregisterCallback(callback)
         report("ENDED")
         if (currentCall === call) currentCall = null
+        probedThisCall = false
         super.onCallRemoved(call)
     }
 
@@ -32,7 +36,10 @@ class SdInCallService : InCallService() {
             Call.STATE_RINGING -> report("RINGING")
             Call.STATE_ACTIVE -> {
                 report("ACTIVE")
-                probeCallAudio()
+                if (!probedThisCall) {
+                    probedThisCall = true
+                    probeCallAudio()
+                }
             }
             Call.STATE_DISCONNECTED -> report("ENDED")
         }
@@ -40,7 +47,18 @@ class SdInCallService : InCallService() {
 
     private fun probeCallAudio() {
         Thread {
-            val payload = try {
+            val privilegePayload = try {
+                RootDiagnostics.collect(this)
+            } catch (t: Throwable) {
+                JSONObject()
+                    .put("mode", "UNKNOWN")
+                    .put("error", t.message ?: t.javaClass.simpleName)
+            }
+            try {
+                GatewayApi.event(this, "DEVICE_CAPABILITY", pendingCallId, pendingCommandId, privilegePayload)
+            } catch (_: Throwable) { }
+
+            val audioPayload = try {
                 AudioCapabilities.probeVoiceCallCapture(this)
             } catch (t: Throwable) {
                 JSONObject()
@@ -49,7 +67,7 @@ class SdInCallService : InCallService() {
                     .put("error", t.message ?: "Audio probe failed")
             }
             try {
-                GatewayApi.event(this, "AUDIO_CAPABILITY", pendingCallId, pendingCommandId, payload)
+                GatewayApi.event(this, "AUDIO_CAPABILITY", pendingCallId, pendingCommandId, audioPayload)
             } catch (_: Throwable) { }
         }.start()
     }
