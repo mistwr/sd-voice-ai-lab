@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { dispatchOutboundCall } from "@/lib/livekit-dispatch";
+import { dispatchAndroidCall } from "@/lib/android-gateway";
 
 export async function POST(req: NextRequest) {
   const supabase = getSupabaseServerClient();
@@ -15,11 +16,20 @@ export async function POST(req: NextRequest) {
     script,
     transfer_to,
     client_name,
+    device_id,
+    telephony_provider = process.env.TELEPHONY_PROVIDER ?? "livekit",
   } = body;
 
   if (!company_id || !phone_number || !objective) {
     return NextResponse.json(
       { error: "company_id, phone_number e objective são obrigatórios." },
+      { status: 400 }
+    );
+  }
+
+  if (telephony_provider === "android" && !device_id) {
+    return NextResponse.json(
+      { error: "device_id é obrigatório quando telephony_provider=android." },
       { status: 400 }
     );
   }
@@ -79,10 +89,34 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (insertError || !call) {
-    return NextResponse.json({ error: insertError?.message ?? "Falha ao criar chamada." }, { status: 500 });
+    return NextResponse.json(
+      { error: insertError?.message ?? "Falha ao criar chamada." },
+      { status: 500 }
+    );
   }
 
   try {
+    if (telephony_provider === "android") {
+      const { commandId } = await dispatchAndroidCall({
+        call_id: call.id,
+        company_id,
+        device_id,
+        phone_number,
+        agent_name,
+        objective,
+        script: script ?? "",
+        transfer_to: transfer_to ?? null,
+        client_name: client_name ?? null,
+      });
+
+      return NextResponse.json({
+        call_id: call.id,
+        provider: "android",
+        device_id,
+        command_id: commandId,
+      });
+    }
+
     const { roomName, dispatchId } = await dispatchOutboundCall({
       call_id: call.id,
       company_id,
@@ -99,13 +133,26 @@ export async function POST(req: NextRequest) {
       .update({ livekit_room: roomName })
       .eq("id", call.id);
 
-    return NextResponse.json({ call_id: call.id, room: roomName, dispatch_id: dispatchId });
+    return NextResponse.json({
+      call_id: call.id,
+      provider: "livekit",
+      room: roomName,
+      dispatch_id: dispatchId,
+    });
   } catch (err: any) {
     await supabase
       .from("voice_calls")
       .update({ status: "failed", error_message: String(err?.message ?? err) })
       .eq("id", call.id);
 
-    return NextResponse.json({ error: "Falha ao despachar a chamada no LiveKit." }, { status: 502 });
+    return NextResponse.json(
+      {
+        error:
+          telephony_provider === "android"
+            ? "Falha ao despachar a chamada para o Android gateway."
+            : "Falha ao despachar a chamada no LiveKit.",
+      },
+      { status: 502 }
+    );
   }
 }
