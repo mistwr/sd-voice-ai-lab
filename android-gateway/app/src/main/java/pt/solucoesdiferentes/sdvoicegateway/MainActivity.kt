@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -33,6 +34,8 @@ class MainActivity : Activity() {
         val token = EditText(this).apply { hint = "Device token"; setText(prefs.getString("device_token", "")) }
         val save = Button(this).apply { text = "Guardar e iniciar gateway" }
         val dialer = Button(this).apply { text = "Definir como app de telefone" }
+        val testNumber = EditText(this).apply { hint = "Número para teste GSM"; inputType = android.text.InputType.TYPE_CLASS_PHONE }
+        val testCall = Button(this).apply { text = "Fazer chamada GSM de teste" }
         status = TextView(this).apply { text = "Gateway parado" }
 
         save.setOnClickListener {
@@ -43,8 +46,8 @@ class MainActivity : Activity() {
                 .apply()
             startGatewayWhenPermitted()
         }
-
         dialer.setOnClickListener { requestDialerRole() }
+        testCall.setOnClickListener { placeTestCall(testNumber.text.toString()) }
 
         layout.addView(title)
         layout.addView(api)
@@ -52,8 +55,27 @@ class MainActivity : Activity() {
         layout.addView(token)
         layout.addView(save)
         layout.addView(dialer)
+        layout.addView(testNumber)
+        layout.addView(testCall)
         layout.addView(status)
         setContentView(layout)
+    }
+
+    private fun placeTestCall(raw: String) {
+        val number = raw.trim().replace(" ", "")
+        if (number.isBlank()) { status.text = "Introduz um número de teste"; return }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            status.text = "Falta autorização Telefone"
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CALL_PHONE), 100)
+            return
+        }
+        try {
+            val telecom = getSystemService(TelecomManager::class.java)
+            status.text = "A iniciar chamada GSM…"
+            telecom.placeCall(Uri.fromParts("tel", number, null), Bundle())
+        } catch (t: Throwable) {
+            status.text = "Erro GSM: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
+        }
     }
 
     private fun requestDialerRole() {
@@ -61,16 +83,12 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val roleManager = getSystemService(RoleManager::class.java)
                 if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)) {
-                    if (roleManager.isRoleHeld(RoleManager.ROLE_DIALER)) {
-                        status.text = "SD Voice Gateway já é a app de telefone"
-                    } else {
+                    if (roleManager.isRoleHeld(RoleManager.ROLE_DIALER)) status.text = "SD Voice Gateway já é a app de telefone"
+                    else {
                         status.text = "A pedir função de app de telefone…"
                         startActivityForResult(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER), 200)
                     }
-                } else {
-                    status.text = "Função Telefone indisponível; a abrir apps predefinidas…"
-                    startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
-                }
+                } else startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
             } else {
                 startActivityForResult(Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).apply {
                     putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
@@ -78,7 +96,6 @@ class MainActivity : Activity() {
             }
         } catch (t: Throwable) {
             status.text = "Erro ao pedir função Telefone: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
-            try { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } catch (_: Throwable) {}
         }
     }
 
@@ -91,16 +108,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requiredPermissions() = arrayOf(
-        Manifest.permission.CALL_PHONE,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.RECORD_AUDIO
-    )
+    private fun requiredPermissions() = arrayOf(Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE, Manifest.permission.RECORD_AUDIO)
 
     private fun startGatewayWhenPermitted() {
-        val missing = requiredPermissions().filter {
-            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
+        val missing = requiredPermissions().filter { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) {
             status.text = "A aguardar permissões…"
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
@@ -121,11 +132,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != 100) return
-        val denied = grantResults.indices.filter { grantResults[it] != PackageManager.PERMISSION_GRANTED }
-        if (denied.isEmpty()) {
-            startGatewaySafely()
-        } else {
-            status.text = "Permissões necessárias recusadas. Autoriza Telefone e Microfone nas definições da app."
-        }
+        if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startGatewaySafely()
+        else status.text = "Permissões necessárias recusadas. Autoriza Telefone e Microfone nas definições da app."
     }
 }
