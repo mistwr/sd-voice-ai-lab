@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("gateway", MODE_PRIVATE) }
+    private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,7 +30,7 @@ class MainActivity : Activity() {
         val token = EditText(this).apply { hint = "Device token"; setText(prefs.getString("device_token", "")) }
         val save = Button(this).apply { text = "Guardar e iniciar gateway" }
         val dialer = Button(this).apply { text = "Definir como app de telefone" }
-        val status = TextView(this).apply { text = "Gateway parado" }
+        status = TextView(this).apply { text = "Gateway parado" }
 
         save.setOnClickListener {
             prefs.edit()
@@ -37,13 +38,10 @@ class MainActivity : Activity() {
                 .putString("device_key", key.text.toString())
                 .putString("device_token", token.text.toString())
                 .apply()
-            requestRuntimePermissions()
-            ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java))
-            status.text = "Gateway iniciado"
+            startGatewayWhenPermitted()
         }
 
         dialer.setOnClickListener {
-            val telecom = getSystemService(TELECOM_SERVICE) as TelecomManager
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 startActivity(Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).apply {
                     putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
@@ -61,13 +59,41 @@ class MainActivity : Activity() {
         setContentView(layout)
     }
 
-    private fun requestRuntimePermissions() {
-        val permissions = arrayOf(
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.RECORD_AUDIO
-        )
-        val missing = permissions.filter { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
+    private fun requiredPermissions() = arrayOf(
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.RECORD_AUDIO
+    )
+
+    private fun startGatewayWhenPermitted() {
+        val missing = requiredPermissions().filter {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            status.text = "A aguardar permissões…"
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
+            return
+        }
+        startGatewaySafely()
+    }
+
+    private fun startGatewaySafely() {
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java))
+            status.text = "Gateway iniciado"
+        } catch (t: Throwable) {
+            status.text = "Erro ao iniciar: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 100) return
+        val denied = grantResults.indices.filter { grantResults[it] != PackageManager.PERMISSION_GRANTED }
+        if (denied.isEmpty()) {
+            startGatewaySafely()
+        } else {
+            status.text = "Permissões necessárias recusadas. Autoriza Telefone e Microfone nas definições da app."
+        }
     }
 }
