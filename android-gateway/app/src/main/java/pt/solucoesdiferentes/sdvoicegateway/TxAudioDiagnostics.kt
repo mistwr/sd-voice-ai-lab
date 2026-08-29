@@ -36,11 +36,12 @@ object TxAudioDiagnostics {
             return out
         }
 
+        // '$' must be escaped because these are shell variables, not Kotlin templates.
         val commands = listOf(
             "command -v tinymix || true",
-            "for p in /vendor/bin/tinymix /system/bin/tinymix /system/xbin/tinymix /data/local/tmp/tinymix; do [ -x \"$p\" ] && echo \"TINYMIX:$p\"; done",
+            "for p in /vendor/bin/tinymix /system/bin/tinymix /system/xbin/tinymix /data/local/tmp/tinymix; do [ -x \"\$p\" ] && echo \"TINYMIX:\$p\"; done",
             "cat /proc/asound/cards 2>/dev/null | head -20",
-            "TM=$(command -v tinymix 2>/dev/null); [ -z \"$TM\" ] && [ -x /vendor/bin/tinymix ] && TM=/vendor/bin/tinymix; [ -n \"$TM\" ] && $TM 2>&1 | grep -iE 'incall|nsrc|bridge|voice tx|voice rx|multimedia|sifs|uaif' | head -80 || true"
+            "TM=\$(command -v tinymix 2>/dev/null); [ -z \"\$TM\" ] && [ -x /vendor/bin/tinymix ] && TM=/vendor/bin/tinymix; [ -n \"\$TM\" ] && \$TM 2>&1 | grep -iE 'incall|nsrc|bridge|voice tx|voice rx|multimedia|sifs|uaif' | head -80 || true"
         )
 
         val scan = runRoot(commands.joinToString("; "))
