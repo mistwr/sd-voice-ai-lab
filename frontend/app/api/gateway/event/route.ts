@@ -3,53 +3,49 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { hashGatewayToken } from "@/lib/android-gateway";
 
 const CALL_STATUS: Record<string, string> = {
-  DIALING: "dialing",
-  RINGING: "ringing",
-  ACTIVE: "active",
-  ENDED: "not_interested",
-  FAILED: "failed",
-  SALE: "sale",
-  CALLBACK: "callback",
-  INTERESTED: "interested",
-  DO_NOT_CALL: "do_not_call",
+  DIALING: "dialing", RINGING: "ringing", ACTIVE: "active", ENDED: "not_interested",
+  FAILED: "failed", SALE: "sale", CALLBACK: "callback", INTERESTED: "interested", DO_NOT_CALL: "do_not_call",
 };
+const CAPABILITY_EVENTS = new Set(["DEVICE_CAPABILITY", "AUDIO_CAPABILITY", "TX_AUDIO_CAPABILITY"]);
 
 async function authenticate(req: NextRequest) {
   const deviceKey = req.headers.get("x-device-key");
   const token = req.headers.get("x-device-token");
   if (!deviceKey || !token) return null;
-
   const supabase = getSupabaseServerClient();
-  const { data: device } = await supabase
-    .from("voice_devices")
-    .select("id,company_id,device_key,token_hash")
-    .eq("device_key", deviceKey)
-    .eq("token_hash", hashGatewayToken(token))
-    .maybeSingle();
+  const { data: device } = await supabase.from("voice_devices")
+    .select("id,company_id,device_key,token_hash,capabilities")
+    .eq("device_key", deviceKey).eq("token_hash", hashGatewayToken(token)).maybeSingle();
   return device ?? null;
 }
 
 export async function POST(req: NextRequest) {
   const device = await authenticate(req);
   if (!device) return NextResponse.json({ error: "Gateway não autorizado." }, { status: 401 });
-
   const body = await req.json();
   const { event_type, call_id, command_id, payload = {} } = body;
   if (!event_type) return NextResponse.json({ error: "event_type obrigatório." }, { status: 400 });
 
   const supabase = getSupabaseServerClient();
   const now = new Date().toISOString();
-
-  await supabase.from("voice_devices").update({
-    status: "online",
-    last_seen_at: now,
-    updated_at: now,
+  const devicePatch: Record<string, unknown> = {
+    status: "online", last_seen_at: now, updated_at: now,
     battery_level: payload.battery_level ?? undefined,
     is_charging: payload.is_charging ?? undefined,
     sim_operator: payload.sim_operator ?? undefined,
     network_type: payload.network_type ?? undefined,
     current_call_id: event_type === "ENDED" || event_type === "FAILED" ? null : call_id ?? undefined,
-  }).eq("id", device.id);
+  };
+
+  if (CAPABILITY_EVENTS.has(event_type)) {
+    const previous = (device.capabilities && typeof device.capabilities === "object") ? device.capabilities : {};
+    devicePatch.capabilities = {
+      ...previous,
+      [event_type.toLowerCase()]: payload,
+      last_capability_event_at: now,
+    };
+  }
+  await supabase.from("voice_devices").update(devicePatch).eq("id", device.id);
 
   if (command_id && ["DIALING", "FAILED", "ENDED"].includes(event_type)) {
     await supabase.from("voice_device_commands").update({
@@ -60,13 +56,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (call_id) {
-    await supabase.from("voice_call_events").insert({
-      call_id,
-      company_id: device.company_id,
-      event_type: event_type.toLowerCase(),
-      payload,
-    });
-
+    await supabase.from("voice_call_events").insert({ call_id, company_id: device.company_id, event_type: event_type.toLowerCase(), payload });
     const status = CALL_STATUS[event_type];
     if (status) {
       const patch: Record<string, unknown> = { status, updated_at: now };
@@ -76,6 +66,5 @@ export async function POST(req: NextRequest) {
       await supabase.from("voice_calls").update(patch).eq("id", call_id).eq("company_id", device.company_id);
     }
   }
-
   return NextResponse.json({ ok: true });
 }
