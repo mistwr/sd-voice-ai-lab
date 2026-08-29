@@ -30,9 +30,28 @@ class SdInCallService : InCallService() {
         when (state) {
             Call.STATE_DIALING, Call.STATE_CONNECTING -> report("DIALING")
             Call.STATE_RINGING -> report("RINGING")
-            Call.STATE_ACTIVE -> report("ACTIVE")
+            Call.STATE_ACTIVE -> {
+                report("ACTIVE")
+                probeCallAudio()
+            }
             Call.STATE_DISCONNECTED -> report("ENDED")
         }
+    }
+
+    private fun probeCallAudio() {
+        Thread {
+            val payload = try {
+                AudioCapabilities.probeVoiceCallCapture(this)
+            } catch (t: Throwable) {
+                JSONObject()
+                    .put("voice_call_capture", false)
+                    .put("reason", t.javaClass.simpleName)
+                    .put("error", t.message ?: "Audio probe failed")
+            }
+            try {
+                GatewayApi.event(this, "AUDIO_CAPABILITY", pendingCallId, pendingCommandId, payload)
+            } catch (_: Throwable) { }
+        }.start()
     }
 
     private fun report(type: String) {
