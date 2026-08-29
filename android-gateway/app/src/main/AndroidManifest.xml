@@ -11,7 +11,7 @@
         android:name="android.permission.CAPTURE_AUDIO_OUTPUT"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -33,10 +33,11 @@
             </intent-filter>
         </activity>
 
+        <!-- The always-on gateway only polls the backend; it is not itself an active phone-call FGS. -->
         <service
             android:name=".GatewayService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall" />
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".SdInCallService"
