@@ -2,9 +2,12 @@ package pt.solucoesdiferentes.sdvoicegateway
 
 import android.Manifest
 import android.app.Activity
+import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.telecom.TelecomManager
 import android.widget.Button
 import android.widget.EditText
@@ -41,13 +44,7 @@ class MainActivity : Activity() {
             startGatewayWhenPermitted()
         }
 
-        dialer.setOnClickListener {
-            if (android.os.Build.VERSION.SDK_INT >= 29) {
-                startActivity(Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).apply {
-                    putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
-                })
-            }
-        }
+        dialer.setOnClickListener { requestDialerRole() }
 
         layout.addView(title)
         layout.addView(api)
@@ -57,6 +54,41 @@ class MainActivity : Activity() {
         layout.addView(dialer)
         layout.addView(status)
         setContentView(layout)
+    }
+
+    private fun requestDialerRole() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val roleManager = getSystemService(RoleManager::class.java)
+                if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)) {
+                    if (roleManager.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                        status.text = "SD Voice Gateway já é a app de telefone"
+                    } else {
+                        status.text = "A pedir função de app de telefone…"
+                        startActivityForResult(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER), 200)
+                    }
+                } else {
+                    status.text = "Função Telefone indisponível; a abrir apps predefinidas…"
+                    startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                }
+            } else {
+                startActivityForResult(Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).apply {
+                    putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
+                }, 200)
+            }
+        } catch (t: Throwable) {
+            status.text = "Erro ao pedir função Telefone: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
+            try { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } catch (_: Throwable) {}
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 200) {
+            val roleManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) getSystemService(RoleManager::class.java) else null
+            val held = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && roleManager?.isRoleHeld(RoleManager.ROLE_DIALER) == true
+            status.text = if (held || resultCode == RESULT_OK) "SD Voice Gateway definido como app de telefone" else "Função de app de telefone não atribuída"
+        }
     }
 
     private fun requiredPermissions() = arrayOf(
