@@ -2,13 +2,14 @@ name: Android Gateway
 
 on:
   push:
-    branches: ["feature/single-device-sofia-final"]
+    branches: ["main", "feature/single-device-sofia-final"]
     paths:
       - "android-gateway/**"
       - ".github/workflows/android-gateway.yml"
   pull_request:
     paths:
       - "android-gateway/**"
+  workflow_dispatch:
 
 jobs:
   build:
