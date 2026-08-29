@@ -69,6 +69,17 @@ class SdInCallService : InCallService() {
             try {
                 GatewayApi.event(this, "AUDIO_CAPABILITY", pendingCallId, pendingCommandId, audioPayload)
             } catch (_: Throwable) { }
+
+            val txPayload = try {
+                TxAudioDiagnostics.collect(this)
+            } catch (t: Throwable) {
+                JSONObject()
+                    .put("candidate", "UNKNOWN")
+                    .put("error", t.message ?: t.javaClass.simpleName)
+            }
+            try {
+                GatewayApi.event(this, "TX_AUDIO_CAPABILITY", pendingCallId, pendingCommandId, txPayload)
+            } catch (_: Throwable) { }
         }.start()
     }
 
