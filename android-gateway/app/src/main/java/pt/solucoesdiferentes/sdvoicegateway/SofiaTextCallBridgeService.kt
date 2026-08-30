@@ -6,11 +6,24 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 class SofiaTextCallBridgeService : AccessibilityService() {
     private val prefs by lazy { getSharedPreferences("gateway", MODE_PRIVATE) }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    @Volatile private var aiBusy = false
+    @Volatile private var lastCustomerText = ""
+    @Volatile private var lastCustomerAt = 0L
+    private var memory = JSONObject()
 
     private val allowedPackages = setOf(
         "com.samsung.android.incallui",
@@ -25,7 +38,8 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             .putBoolean("bridge_service_connected", true)
             .putString("diag_TEXT_CALL_BRIDGE", JSONObject()
                 .put("service_connected", true)
-                .put("mode", "LAB_READ_AND_FILL_ONLY")
+                .put("mode", "TEXT_CALL_BRIDGE_47")
+                .put("ai_enabled", prefs.getBoolean("bridge_ai_enabled", false))
                 .put("auto_send", false)
                 .toString())
             .apply()
@@ -46,7 +60,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
         val customerCandidate = pickCustomerText(visibleTexts)
         val snapshot = JSONObject()
-            .put("mode", "LAB_READ_AND_FILL_ONLY")
+            .put("mode", "TEXT_CALL_BRIDGE_47")
             .put("package", pkg)
             .put("event_type", event.eventType)
             .put("event_time", event.eventTime)
@@ -55,6 +69,8 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             .put("visible_texts", JSONArray(visibleTexts.takeLast(40)))
             .put("customer_candidate", customerCandidate ?: JSONObject.NULL)
             .put("nodes", nodes)
+            .put("ai_enabled", prefs.getBoolean("bridge_ai_enabled", false))
+            .put("ai_busy", aiBusy)
             .put("auto_send", false)
 
         var fillResult: Boolean? = null
@@ -92,6 +108,87 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             .putInt("bridge_editable_count", editableCandidates.size)
             .putLong("bridge_last_event_at", System.currentTimeMillis())
             .apply()
+
+        if (prefs.getBoolean("bridge_ai_enabled", false) &&
+            customerCandidate != null &&
+            editableCandidates.isNotEmpty()) {
+            maybeGenerateOfflineReply(customerCandidate)
+        }
+    }
+
+    private fun maybeGenerateOfflineReply(customerText: String) {
+        val clean = customerText.trim()
+        if (clean.length < 4 || aiBusy) return
+
+        val now = System.currentTimeMillis()
+        if (clean.equals(lastCustomerText, ignoreCase = true) && now - lastCustomerAt < 20_000L) return
+
+        val lastReply = prefs.getString("bridge_last_ai_reply", "").orEmpty().trim()
+        if (lastReply.isNotBlank() && clean.equals(lastReply, ignoreCase = true)) return
+
+        lastCustomerText = clean
+        lastCustomerAt = now
+        aiBusy = true
+        prefs.edit()
+            .putString("bridge_ai_status", "A pensar: $clean")
+            .putString("bridge_last_customer_for_ai", clean)
+            .apply()
+
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    ensureLocalModelReady()
+                    SofiaLocalEngine.respond(applicationContext, clean, memory)
+                }
+                val reply = result.optString("reply", "").trim()
+                val newMemory = result.optJSONObject("memory")
+                if (newMemory != null) memory = newMemory
+                if (reply.isBlank()) throw IllegalStateException("Resposta local vazia")
+
+                val fill = fillFreshEditable(reply)
+                prefs.edit()
+                    .putString("bridge_last_ai_reply", reply)
+                    .putString("bridge_ai_status", if (fill) "Resposta pronta na caixa Samsung" else "Resposta gerada; campo Samsung não encontrado")
+                    .putBoolean("bridge_last_ai_fill_result", fill)
+                    .putString("bridge_last_ai_outcome", result.optString("outcome", "CONTINUE"))
+                    .apply()
+
+                if (fill) {
+                    Toast.makeText(
+                        this@SofiaTextCallBridgeService,
+                        "Sofia respondeu offline. Revê e envia manualmente.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (t: Throwable) {
+                prefs.edit()
+                    .putString("bridge_ai_status", "Erro Sofia offline: ${t.message ?: t.javaClass.simpleName}")
+                    .apply()
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
+    private fun ensureLocalModelReady() {
+        if (SofiaLocalEngine.isReady(applicationContext)) return
+        val path = prefs.getString("offline_model_path", "").orEmpty().trim()
+        require(path.isNotBlank()) { "Modelo local não configurado" }
+        val file = File(path)
+        require(file.exists() && file.length() > 100_000_000L) { "GGUF local não encontrado" }
+        kotlinx.coroutines.runBlocking {
+            SofiaLocalEngine.load(applicationContext, file.absolutePath)
+        }
+    }
+
+    private fun fillFreshEditable(reply: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val nodes = JSONArray()
+        val texts = mutableListOf<String>()
+        val editables = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes, texts, editables, 0)
+        if (editables.isEmpty()) return false
+        return setText(chooseEditable(editables), reply)
     }
 
     override fun onInterrupt() {
@@ -100,6 +197,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
     override fun onDestroy() {
         prefs.edit().putBoolean("bridge_service_connected", false).apply()
+        scope.cancel()
         super.onDestroy()
     }
 
