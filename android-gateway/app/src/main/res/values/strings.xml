@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="sofia_text_call_bridge_description">Permite à Sofia ler a transcrição da Chamada de texto Samsung e preencher a caixa de resposta. O Build 45 de laboratório não envia respostas automaticamente.</string>
+    <string name="sofia_text_call_bridge_description">Permite à Sofia ler a transcrição da Chamada de texto Samsung, gerar a resposta localmente e preencher/enviar pela interface Samsung quando o modo automático estiver ativo.</string>
 </resources>
