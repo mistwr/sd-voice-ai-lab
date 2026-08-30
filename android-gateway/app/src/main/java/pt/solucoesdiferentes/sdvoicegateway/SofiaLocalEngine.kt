@@ -10,25 +10,26 @@ import org.json.JSONObject
 /**
  * Reusable on-device brain for Sofia.
  *
- * The model lives in app-private storage and inference runs locally through llama.cpp.
- * No API key or Internet connection is required after the GGUF has been downloaded/imported.
+ * The LLM only writes the natural sentence that Sofia should say. Structured call
+ * state is kept deterministic in the Android app so small local models do not have
+ * to generate fragile JSON during a live phone conversation.
  */
 object SofiaLocalEngine {
-    private val lock = Any()
     @Volatile private var loadedPath: String? = null
 
-    private const val SYSTEM_PROMPT = """És a Sofia, assistente comercial IA da Soluções Diferentes / SD Voice.
-Falas sempre em português de Portugal, de forma natural, curta, educada e humana.
-Identifica-te como assistente virtual quando for relevante. Não finjas ser uma pessoa.
-O objetivo é perceber a necessidade do cliente e ajudar, nunca pressionar.
-Faz apenas uma pergunta de cada vez e evita respostas longas.
+    private const val SYSTEM_PROMPT = """És a Sofia, assistente comercial virtual da Soluções Diferentes / SD Voice.
+Fala sempre em português de Portugal.
+A tua resposta será dita em voz numa chamada telefónica, por isso responde de forma natural, curta e clara.
+Nunca repitas simplesmente a frase do cliente.
+Faz no máximo uma pergunta de cada vez.
+O objetivo é perceber a situação atual do cliente antes de sugerir qualquer alternativa.
 Nunca inventes preços, campanhas, cobertura, fidelização, poupanças ou condições.
-Se o cliente pedir para não ser contactado, respeita imediatamente e usa DO_NOT_CALL.
-Se houver interesse sem dados suficientes usa INTERESTED; se pedir contacto posterior usa CALLBACK; se não houver interesse usa NOT_INTERESTED; caso contrário CONTINUE.
-Mantém na memória apenas factos realmente ditos pelo cliente.
-/no_think
-Responde APENAS em JSON válido nesta forma, sem markdown:
-{"reply":"frase curta a dizer ao cliente","outcome":"CONTINUE|INTERESTED|CALLBACK|NOT_INTERESTED|DO_NOT_CALL","memory":{}}"""
+Se o cliente disser quanto paga, pergunta de forma natural o que está incluído nesse valor.
+Se disser o operador, usa essa informação e avança para uma pergunta útil seguinte.
+Se pedir para não ser contactado, pede desculpa de forma breve e confirma que o contacto termina.
+Não uses listas, JSON, markdown, etiquetas, raciocínio ou comentários internos.
+Não escrevas 'Sofia:' no início.
+/no_think"""
 
     private fun engine(context: Context): InferenceEngine =
         AiChat.getInferenceEngine(context.applicationContext)
@@ -51,12 +52,8 @@ Responde APENAS em JSON válido nesta forma, sem markdown:
 
         if (loadedPath == modelPath && e.state.value is InferenceEngine.State.ModelReady) return
 
-        if (e.state.value is InferenceEngine.State.ModelReady) {
-            e.cleanUp()
-            loadedPath = null
-        }
-        if (e.state.value is InferenceEngine.State.Error) {
-            e.cleanUp()
+        if (e.state.value is InferenceEngine.State.ModelReady || e.state.value is InferenceEngine.State.Error) {
+            try { e.cleanUp() } catch (_: Throwable) {}
             loadedPath = null
         }
 
@@ -69,29 +66,31 @@ Responde APENAS em JSON válido nesta forma, sem markdown:
         val e = engine(context)
         check(e.state.value is InferenceEngine.State.ModelReady) { "Modelo local da Sofia ainda não está carregado." }
 
+        val customer = customerText.trim()
+        require(customer.isNotBlank()) { "O texto do cliente está vazio." }
+
         val prompt = buildString {
             append("/no_think\n")
-            append("O cliente disse: ")
-            append(customerText.trim())
-            append("\nMemória atual (JSON): ")
-            append(memory.toString())
-            append("\nResponde agora apenas com o JSON pedido.")
+            append("Contexto conhecido do cliente: ")
+            append(if (memory.length() == 0) "ainda sem dados" else memory.toString())
+            append("\nCliente: ")
+            append(customer)
+            append("\nResponde apenas com a próxima frase curta que a Sofia deve dizer ao cliente.")
         }
 
         val out = StringBuilder()
-        e.sendUserPrompt(prompt, 220).collect { token -> out.append(token) }
-        val raw = stripThinking(out.toString()).trim()
-        val parsed = parseJsonObject(raw)
+        e.sendUserPrompt(prompt, 90).collect { token -> out.append(token) }
+        var reply = cleanReply(out.toString())
 
-        val reply = parsed.optString("reply", "").trim().ifBlank {
-            raw.trim().take(500)
+        // A small model occasionally echoes the input. Replace that with a safe,
+        // useful discovery question instead of speaking the echo back to the client.
+        if (isEcho(reply, customer)) {
+            reply = discoveryFallback(customer)
         }
         require(reply.isNotBlank()) { "O modelo local não gerou uma resposta falada." }
 
-        val allowed = setOf("CONTINUE", "INTERESTED", "CALLBACK", "NOT_INTERESTED", "DO_NOT_CALL")
-        val requestedOutcome = parsed.optString("outcome", "CONTINUE").uppercase()
-        val outcome = if (requestedOutcome in allowed) requestedOutcome else "CONTINUE"
-        val nextMemory = parsed.optJSONObject("memory") ?: memory
+        val outcome = classifyOutcome(customer)
+        val nextMemory = updateMemory(memory, customer)
 
         return JSONObject()
             .put("ok", true)
@@ -102,21 +101,66 @@ Responde APENAS em JSON válido nesta forma, sem markdown:
             .put("offline", true)
     }
 
-    private fun stripThinking(text: String): String =
-        text.replace(Regex("(?s)<think>.*?</think>"), "")
-            .replace(Regex("^```(?:json)?\\s*", RegexOption.IGNORE_CASE), "")
+    private fun cleanReply(raw: String): String {
+        var text = raw
+            .replace(Regex("(?s)<think>.*?</think>"), "")
+            .replace(Regex("^```(?:text)?\\s*", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s*```$"), "")
             .trim()
+        text = text.replace(Regex("^(Sofia|Assistente)\\s*:\\s*", RegexOption.IGNORE_CASE), "").trim()
+        val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        return firstLine.take(320)
+    }
 
-    private fun parseJsonObject(text: String): JSONObject {
-        return try {
-            JSONObject(text)
-        } catch (_: Throwable) {
-            val start = text.indexOf('{')
-            val end = text.lastIndexOf('}')
-            if (start >= 0 && end > start) {
-                try { JSONObject(text.substring(start, end + 1)) } catch (_: Throwable) { JSONObject() }
-            } else JSONObject()
+    private fun normalize(text: String): String = text
+        .lowercase()
+        .replace(Regex("[^a-záàâãéêíóôõúç0-9]+"), " ")
+        .trim()
+
+    private fun isEcho(reply: String, customer: String): Boolean {
+        val r = normalize(reply)
+        val c = normalize(customer)
+        if (r.isBlank() || c.isBlank()) return false
+        return r == c || (r.length >= 8 && (r.contains(c) || c.contains(r)))
+    }
+
+    private fun discoveryFallback(customer: String): String {
+        val t = customer.lowercase()
+        val hasPrice = Regex("\\b\\d{1,3}(?:[,.]\\d{1,2})?\\s*(?:€|euros?)?\\b").containsMatchIn(t)
+        return when {
+            hasPrice -> "Perfeito. O que é que está incluído nesse valor: televisão, internet e quantos telemóveis?"
+            listOf("digi", "meo", "nos", "vodafone", "uzo", "woo", "amigo", "nowo").any { it in t } ->
+                "Perfeito. E atualmente que serviços tem nesse operador?"
+            else -> "Percebi. Pode dizer-me quanto paga atualmente e que serviços tem incluídos?"
         }
+    }
+
+    private fun classifyOutcome(customer: String): String {
+        val t = normalize(customer)
+        if (listOf("não me liguem", "nao me liguem", "não quero ser contactado", "nao quero ser contactado", "não me contacte", "nao me contacte").any { it in t }) {
+            return "DO_NOT_CALL"
+        }
+        if (listOf("ligue mais tarde", "liga mais tarde", "contacte mais tarde", "amanhã", "amanha", "depois falamos").any { it in t }) {
+            return "CALLBACK"
+        }
+        if (listOf("não estou interessado", "nao estou interessado", "não quero", "nao quero", "sem interesse").any { it in t }) {
+            return "NOT_INTERESTED"
+        }
+        if (listOf("quero aderir", "tenho interesse", "estou interessado", "pode avançar", "pode avancar", "vamos avançar", "vamos avancar").any { it in t }) {
+            return "INTERESTED"
+        }
+        return "CONTINUE"
+    }
+
+    private fun updateMemory(memory: JSONObject, customer: String): JSONObject {
+        val next = JSONObject(memory.toString())
+        val t = customer.lowercase()
+        val operators = listOf("DIGI", "MEO", "NOS", "Vodafone", "UZO", "WOO", "Amigo", "NOWO")
+        operators.firstOrNull { t.contains(it.lowercase()) }?.let { next.put("current_operator", it) }
+
+        Regex("\\b(\\d{1,3}(?:[,.]\\d{1,2})?)\\s*(?:€|euros?)\\b", RegexOption.IGNORE_CASE)
+            .find(customer)?.groupValues?.getOrNull(1)?.let { next.put("monthly_price", it.replace(',', '.')) }
+
+        return next
     }
 }
