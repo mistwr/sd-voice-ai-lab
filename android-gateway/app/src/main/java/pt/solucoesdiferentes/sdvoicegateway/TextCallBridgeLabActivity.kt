@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -20,6 +21,7 @@ class TextCallBridgeLabActivity : Activity() {
     private lateinit var state: TextView
     private lateinit var diagnostic: TextView
     private lateinit var draft: EditText
+    private lateinit var aiSwitch: Switch
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -39,7 +41,7 @@ class TextCallBridgeLabActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 45 · Samsung RX/TX no-root · laboratório"
+            text = "Build 47 · Samsung Text Call + Qwen offline"
             textSize = 13f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(4), 0, dp(16))
@@ -82,11 +84,19 @@ class TextCallBridgeLabActivity : Activity() {
         }
         root.addView(arm)
 
+        aiSwitch = Switch(this).apply {
+            text = "3 · Sofia offline automática (SEM enviar)"
+            setTextColor(Color.WHITE)
+            isChecked = prefs.getBoolean("bridge_ai_enabled", false)
+            setPadding(0, dp(12), 0, dp(8))
+        }
+        root.addView(aiSwitch)
+
         root.addView(TextView(this).apply {
-            text = "Este Build 45 NÃO carrega no botão de enviar. Só tenta ler a transcrição Samsung e preencher a caixa de resposta. Depois confirmamos manualmente antes de ligar o autopilot."
+            text = "Com esta opção ligada, a ponte tenta ler a última frase do cliente no Samsung Text Call, passa-a ao Qwen local e preenche a resposta. O Build 47 NÃO carrega no botão Enviar: confirmas manualmente antes de a voz Samsung falar para o cliente."
             textSize = 12f
             setTextColor(Color.LTGRAY)
-            setPadding(0, dp(10), 0, dp(12))
+            setPadding(0, dp(8), 0, dp(12))
         })
 
         val refresh = Button(this).apply {
@@ -126,6 +136,16 @@ class TextCallBridgeLabActivity : Activity() {
             updateUi()
         }
 
+        aiSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("bridge_ai_enabled", checked).apply()
+            Toast.makeText(
+                this,
+                if (checked) "Sofia offline ligada. Continua sem envio automático." else "Sofia offline desligada.",
+                Toast.LENGTH_SHORT
+            ).show()
+            updateUi()
+        }
+
         refresh.setOnClickListener { updateUi() }
 
         setContentView(ScrollView(this).apply { addView(root) })
@@ -140,14 +160,24 @@ class TextCallBridgeLabActivity : Activity() {
     private fun updateUi() {
         val enabled = isBridgeEnabled()
         val armed = prefs.getBoolean("bridge_arm_once", false)
+        val aiEnabled = prefs.getBoolean("bridge_ai_enabled", false)
         val editableCount = prefs.getInt("bridge_editable_count", 0)
         val candidate = prefs.getString("bridge_customer_candidate", "").orEmpty()
+        val aiStatus = prefs.getString("bridge_ai_status", "").orEmpty()
+        val reply = prefs.getString("bridge_last_ai_reply", "").orEmpty()
+
+        if (::aiSwitch.isInitialized && aiSwitch.isChecked != aiEnabled) aiSwitch.isChecked = aiEnabled
+
         state.text = buildString {
             append(if (enabled) "✓ Ponte de acessibilidade ATIVA" else "⚠ Ponte de acessibilidade DESLIGADA")
             append("\n")
             append(if (armed) "● Preenchimento único ARMADO" else "Preenchimento não armado")
+            append("\n")
+            append(if (aiEnabled) "🤖 Qwen → Text Call ATIVO (envio manual)" else "Qwen → Text Call desligado")
             append("\nCampos editáveis detetados: $editableCount")
             if (candidate.isNotBlank()) append("\nTexto candidato do cliente: $candidate")
+            if (aiStatus.isNotBlank()) append("\nEstado IA: $aiStatus")
+            if (reply.isNotBlank()) append("\nÚltima resposta Sofia: $reply")
         }
         state.setTextColor(if (enabled) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
         diagnostic.text = prefs.getString("diag_TEXT_CALL_BRIDGE", "Sem eventos da interface Samsung ainda.")
