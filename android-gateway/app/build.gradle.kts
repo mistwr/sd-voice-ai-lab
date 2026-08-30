@@ -11,8 +11,8 @@ android {
         applicationId = "pt.solucoesdiferentes.sdvoicegateway"
         minSdk = 30
         targetSdk = 35
-        versionCode = 47
-        versionName = "0.47.0"
+        versionCode = 48
+        versionName = "0.48.0"
     }
 
     buildTypes {
