@@ -6,7 +6,12 @@ const CALL_STATUS: Record<string, string> = {
   DIALING: "dialing", RINGING: "ringing", ACTIVE: "active", ENDED: "not_interested",
   FAILED: "failed", SALE: "sale", CALLBACK: "callback", INTERESTED: "interested", DO_NOT_CALL: "do_not_call",
 };
-const CAPABILITY_EVENTS = new Set(["DEVICE_CAPABILITY", "AUDIO_CAPABILITY", "TX_AUDIO_CAPABILITY"]);
+const CAPABILITY_EVENTS = new Set([
+  "DEVICE_CAPABILITY",
+  "AUDIO_CAPABILITY",
+  "TX_AUDIO_CAPABILITY",
+  "STOCK_AUDIO_ROUTE_CAPABILITY",
+]);
 
 async function authenticate(req: NextRequest) {
   const deviceKey = req.headers.get("x-device-key");

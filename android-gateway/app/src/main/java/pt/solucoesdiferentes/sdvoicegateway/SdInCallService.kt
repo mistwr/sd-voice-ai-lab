@@ -45,15 +45,29 @@ class SdInCallService : InCallService() {
 
     private fun probeCallAudio() {
         Thread {
-            val privilegePayload = try { RootDiagnostics.collect(this) } catch (t: Throwable) {
-                JSONObject().put("mode", "UNKNOWN").put("error", t.message ?: t.javaClass.simpleName)
+            val devicePayload = try {
+                JSONObject()
+                    .put("manufacturer", android.os.Build.MANUFACTURER)
+                    .put("model", android.os.Build.MODEL)
+                    .put("device", android.os.Build.DEVICE)
+                    .put("hardware", android.os.Build.HARDWARE)
+                    .put("board", android.os.Build.BOARD)
+                    .put("sdk", android.os.Build.VERSION.SDK_INT)
+                    .put("mode", "STOCK_ONLY")
+            } catch (t: Throwable) {
+                JSONObject().put("mode", "STOCK_ONLY").put("error", t.message ?: t.javaClass.simpleName)
             }
-            sendCapability("DEVICE_CAPABILITY", privilegePayload)
+            sendCapability("DEVICE_CAPABILITY", devicePayload)
 
             val audioPayload = try { AudioCapabilities.probeVoiceCallCapture(this) } catch (t: Throwable) {
                 JSONObject().put("voice_call_capture", false).put("reason", t.javaClass.simpleName).put("error", t.message ?: "Audio probe failed")
             }
             sendCapability("AUDIO_CAPABILITY", audioPayload)
+
+            val routePayload = try { StockAudioRouteDiagnostics.collect(this) } catch (t: Throwable) {
+                JSONObject().put("mode", "STOCK_ONLY").put("error", t.message ?: t.javaClass.simpleName)
+            }
+            sendCapability("STOCK_AUDIO_ROUTE_CAPABILITY", routePayload)
 
             val txPayload = try { TxAudioDiagnostics.collect(this) } catch (t: Throwable) {
                 JSONObject().put("candidate", "UNKNOWN").put("error", t.message ?: t.javaClass.simpleName)
