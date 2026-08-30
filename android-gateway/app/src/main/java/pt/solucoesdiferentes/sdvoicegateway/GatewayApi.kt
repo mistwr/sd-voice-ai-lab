@@ -10,10 +10,18 @@ import java.net.URL
 import java.net.URLEncoder
 
 object GatewayApi {
+    private const val DEFAULT_API_URL = "https://sd-voice-ai-lab.vercel.app"
+
     private fun connection(context: Context, path: String, contentType: String = "application/json"): HttpURLConnection {
         val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
-        val base = prefs.getString("api_url", "")?.trimEnd('/') ?: ""
-        require(base.startsWith("https://") || base.startsWith("http://")) { "API URL inválido" }
+        val configured = prefs.getString("api_url", "")?.trim()?.trimEnd('/') ?: ""
+        val base = if (configured.startsWith("https://") || configured.startsWith("http://")) {
+            configured
+        } else {
+            DEFAULT_API_URL.also {
+                prefs.edit().putString("api_url", it).apply()
+            }
+        }
         return (URL(base + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000
