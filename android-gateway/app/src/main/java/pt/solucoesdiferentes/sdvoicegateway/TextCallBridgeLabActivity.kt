@@ -22,6 +22,7 @@ class TextCallBridgeLabActivity : Activity() {
     private lateinit var diagnostic: TextView
     private lateinit var draft: EditText
     private lateinit var aiSwitch: Switch
+    private lateinit var autoSendSwitch: Switch
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -41,7 +42,7 @@ class TextCallBridgeLabActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 48 · Samsung Text Call + Qwen offline"
+            text = "Build 49 · Samsung Text Call + Qwen + auto-envio"
             textSize = 13f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(4), 0, dp(12))
@@ -91,15 +92,23 @@ class TextCallBridgeLabActivity : Activity() {
         root.addView(arm)
 
         aiSwitch = Switch(this).apply {
-            text = "3 · Sofia offline automática (SEM enviar)"
+            text = "3 · Sofia offline automática"
             setTextColor(Color.WHITE)
             isChecked = prefs.getBoolean("bridge_ai_enabled", false)
-            setPadding(0, dp(12), 0, dp(8))
+            setPadding(0, dp(12), 0, dp(6))
         }
         root.addView(aiSwitch)
 
+        autoSendSwitch = Switch(this).apply {
+            text = "4 · ENVIAR automaticamente pela voz Samsung"
+            setTextColor(Color.WHITE)
+            isChecked = prefs.getBoolean("bridge_auto_send", false)
+            setPadding(0, dp(6), 0, dp(8))
+        }
+        root.addView(autoSendSwitch)
+
         root.addView(TextView(this).apply {
-            text = "Com esta opção ligada, a ponte tenta ler a última frase do cliente no Samsung Text Call, passa-a ao Qwen local e preenche a resposta. O Build 48 NÃO carrega no botão Enviar: confirmas manualmente antes de a voz Samsung falar para o cliente."
+            text = "Com o auto-envio ligado, a Sofia só clica se encontrar exatamente um controlo Samsung identificável como Enviar/Send e se o texto atual da caixa for exatamente a resposta gerada pelo Qwen. Se não conseguir identificar com segurança, NÃO envia."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(8), 0, dp(12))
@@ -121,10 +130,7 @@ class TextCallBridgeLabActivity : Activity() {
         root.addView(diagnostic)
 
         mainPanel.setOnClickListener { startActivity(Intent(this, MainActivity::class.java)) }
-
-        access.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        access.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
 
         arm.setOnClickListener {
             val phrase = draft.text.toString().trim()
@@ -136,21 +142,21 @@ class TextCallBridgeLabActivity : Activity() {
                 .putString("bridge_test_draft", phrase)
                 .putBoolean("bridge_arm_once", true)
                 .apply()
-            Toast.makeText(
-                this,
-                "Armado. Faz a chamada Samsung, abre Chamada de texto e espera a caixa de resposta aparecer.",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(this, "Armado. Abre Samsung Chamada de texto.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
 
         aiSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("bridge_ai_enabled", checked).apply()
-            Toast.makeText(
-                this,
-                if (checked) "Sofia offline ligada. Continua sem envio automático." else "Sofia offline desligada.",
-                Toast.LENGTH_SHORT
-            ).show()
+            if (!checked && autoSendSwitch.isChecked) autoSendSwitch.isChecked = false
+            Toast.makeText(this, if (checked) "Sofia offline ligada." else "Sofia offline desligada.", Toast.LENGTH_SHORT).show()
+            updateUi()
+        }
+
+        autoSendSwitch.setOnCheckedChangeListener { _, checked ->
+            if (checked && !aiSwitch.isChecked) aiSwitch.isChecked = true
+            prefs.edit().putBoolean("bridge_auto_send", checked).apply()
+            Toast.makeText(this, if (checked) "Auto-envio ATIVO." else "Auto-envio desligado.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
 
@@ -169,19 +175,23 @@ class TextCallBridgeLabActivity : Activity() {
         val enabled = isBridgeEnabled()
         val armed = prefs.getBoolean("bridge_arm_once", false)
         val aiEnabled = prefs.getBoolean("bridge_ai_enabled", false)
+        val autoSend = prefs.getBoolean("bridge_auto_send", false)
         val editableCount = prefs.getInt("bridge_editable_count", 0)
         val candidate = prefs.getString("bridge_customer_candidate", "").orEmpty()
         val aiStatus = prefs.getString("bridge_ai_status", "").orEmpty()
         val reply = prefs.getString("bridge_last_ai_reply", "").orEmpty()
 
         if (::aiSwitch.isInitialized && aiSwitch.isChecked != aiEnabled) aiSwitch.isChecked = aiEnabled
+        if (::autoSendSwitch.isInitialized && autoSendSwitch.isChecked != autoSend) autoSendSwitch.isChecked = autoSend
 
         state.text = buildString {
             append(if (enabled) "✓ Ponte de acessibilidade ATIVA" else "⚠ Ponte de acessibilidade DESLIGADA")
             append("\n")
             append(if (armed) "● Preenchimento único ARMADO" else "Preenchimento não armado")
             append("\n")
-            append(if (aiEnabled) "🤖 Qwen → Text Call ATIVO (envio manual)" else "Qwen → Text Call desligado")
+            append(if (aiEnabled) "🤖 Qwen → Text Call ATIVO" else "Qwen → Text Call desligado")
+            append("\n")
+            append(if (autoSend) "📤 AUTO-ENVIO ATIVO" else "Envio manual")
             append("\nCampos editáveis detetados: $editableCount")
             if (candidate.isNotBlank()) append("\nTexto candidato do cliente: $candidate")
             if (aiStatus.isNotBlank()) append("\nEstado IA: $aiStatus")
