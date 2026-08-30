@@ -54,6 +54,16 @@
         </activity>
 
         <activity
+            android:name=".TextCallBridgeLabActivity"
+            android:exported="true"
+            android:label="Sofia Text Call Bridge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".SofiaBrainActivity"
             android:exported="false" />
 
@@ -75,6 +85,19 @@
             android:name=".GatewayService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".SofiaTextCallBridgeService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:label="Sofia Text Call Bridge">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/sofia_text_call_accessibility" />
+        </service>
 
         <service
             android:name=".SdInCallService"
