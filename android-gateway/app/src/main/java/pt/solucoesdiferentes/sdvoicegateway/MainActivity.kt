@@ -34,7 +34,7 @@ class MainActivity : Activity() {
         val dialer = Button(this).apply { text = "Definir como app de telefone" }
         val testNumber = EditText(this).apply { hint = "Número para teste GSM"; inputType = android.text.InputType.TYPE_CLASS_PHONE }
         val testCall = Button(this).apply { text = "Fazer chamada GSM de teste" }
-        val refresh = Button(this).apply { text = "Ver diagnóstico da chamada" }
+        val refresh = Button(this).apply { text = "Ver diagnóstico Build 36" }
         status = TextView(this).apply { text = "Gateway parado" }
         diagnostics = TextView(this).apply { text = "Diagnóstico: ainda sem dados"; setTextIsSelectable(true) }
 
@@ -53,9 +53,12 @@ class MainActivity : Activity() {
     override fun onResume() { super.onResume(); showDiagnostics() }
 
     private fun showDiagnostics() {
-        val names = listOf("CALL","STATE","DEVICE_CAPABILITY","AUDIO_CAPABILITY","TX_AUDIO_CAPABILITY","DEVICE_CAPABILITY_HTTP_ERROR","AUDIO_CAPABILITY_HTTP_ERROR","TX_AUDIO_CAPABILITY_HTTP_ERROR")
+        val names = listOf(
+            "CALL","STATE","DEVICE_CAPABILITY","AUDIO_CAPABILITY","STOCK_AUDIO_ROUTE_CAPABILITY","TX_AUDIO_CAPABILITY",
+            "DEVICE_CAPABILITY_HTTP_ERROR","AUDIO_CAPABILITY_HTTP_ERROR","STOCK_AUDIO_ROUTE_CAPABILITY_HTTP_ERROR","TX_AUDIO_CAPABILITY_HTTP_ERROR"
+        )
         val text = names.mapNotNull { n -> prefs.getString("diag_$n", null)?.let { "$n:\n$it" } }.joinToString("\n\n")
-        diagnostics.text = if (text.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM\n\n$text"
+        diagnostics.text = if (text.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM — BUILD 36 STOCK ONLY\n\n$text"
     }
 
     private fun placeTestCall(raw: String) {
@@ -96,7 +99,7 @@ class MainActivity : Activity() {
         startGatewaySafely()
     }
     private fun startGatewaySafely() {
-        try { ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java)); status.text = "Gateway iniciado" }
+        try { ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java)); status.text = "Gateway iniciado — Build 36 stock only" }
         catch (t: Throwable) { status.text = "Erro ao iniciar: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}" }
     }
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
