@@ -16,6 +16,7 @@
 
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:label="SD Voice Gateway"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
@@ -43,6 +44,10 @@
 
         <activity
             android:name=".SofiaBrainActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".OfflineSofiaActivity"
             android:exported="false" />
 
         <provider
