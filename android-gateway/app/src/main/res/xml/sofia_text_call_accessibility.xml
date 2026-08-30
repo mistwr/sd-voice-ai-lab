@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewTextChanged|typeViewFocused"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="80"
+    android:canRetrieveWindowContent="true"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:packageNames="com.samsung.android.incallui,com.samsung.android.callassistant,com.samsung.android.dialer,com.samsung.android.app.telephonyui"
+    android:description="@string/sofia_text_call_bridge_description" />
