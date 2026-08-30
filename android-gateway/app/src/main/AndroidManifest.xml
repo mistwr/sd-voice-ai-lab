@@ -27,13 +27,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- ROLE_DIALER qualification checks ACTION_DIAL even when no tel: URI is supplied. -->
             <intent-filter>
                 <action android:name="android.intent.action.DIAL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            <!-- Also handle normal telephone dial intents. -->
             <intent-filter>
                 <action android:name="android.intent.action.DIAL" />
                 <action android:name="android.intent.action.VIEW" />
@@ -43,13 +41,21 @@
             </intent-filter>
         </activity>
 
-        <!-- The always-on gateway only polls the backend; it is not itself an active phone-call FGS. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".GatewayService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- A default dialer must provide an InCallService UI implementation. -->
         <service
             android:name=".SdInCallService"
             android:permission="android.permission.BIND_INCALL_SERVICE"
