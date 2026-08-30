@@ -15,6 +15,7 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 
 class TextCallBridgeLabActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("gateway", MODE_PRIVATE) }
@@ -42,16 +43,13 @@ class TextCallBridgeLabActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 49 · Samsung Text Call + Qwen + auto-envio"
+            text = "Build 50 · Samsung Text Call + Qwen + auto-envio"
             textSize = 13f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(4), 0, dp(12))
         })
 
-        val mainPanel = Button(this).apply {
-            text = "← Abrir painel principal da Sofia"
-            isAllCaps = false
-        }
+        val mainPanel = Button(this).apply { text = "← Abrir painel principal da Sofia"; isAllCaps = false }
         root.addView(mainPanel)
 
         state = TextView(this).apply {
@@ -62,11 +60,11 @@ class TextCallBridgeLabActivity : Activity() {
         }
         root.addView(state)
 
-        val access = Button(this).apply {
-            text = "1 · Ativar ponte de acessibilidade"
-            isAllCaps = false
-        }
+        val access = Button(this).apply { text = "1 · Ativar ponte de acessibilidade"; isAllCaps = false }
         root.addView(access)
+
+        val prepareQwen = Button(this).apply { text = "🧠 Preparar / carregar Qwen local"; isAllCaps = false }
+        root.addView(prepareQwen)
 
         root.addView(TextView(this).apply {
             text = "Frase de teste a preencher na caixa ‘Escrever resposta’"
@@ -85,10 +83,7 @@ class TextCallBridgeLabActivity : Activity() {
         }
         root.addView(draft, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        val arm = Button(this).apply {
-            text = "2 · Armar preenchimento único"
-            isAllCaps = false
-        }
+        val arm = Button(this).apply { text = "2 · Armar preenchimento único"; isAllCaps = false }
         root.addView(arm)
 
         aiSwitch = Switch(this).apply {
@@ -108,16 +103,13 @@ class TextCallBridgeLabActivity : Activity() {
         root.addView(autoSendSwitch)
 
         root.addView(TextView(this).apply {
-            text = "Com o auto-envio ligado, a Sofia só clica se encontrar exatamente um controlo Samsung identificável como Enviar/Send e se o texto atual da caixa for exatamente a resposta gerada pelo Qwen. Se não conseguir identificar com segurança, NÃO envia."
+            text = "Build 50 só aceita texto quando deteta a interface real da Chamada de texto. O ecrã Recentes/Contactos já não substitui o diagnóstico útil da chamada. O auto-envio continua protegido: só envia se a caixa contiver exatamente a resposta da Sofia e existir um único botão Enviar/Send identificável."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(8), 0, dp(12))
         })
 
-        val refresh = Button(this).apply {
-            text = "Atualizar diagnóstico da ponte"
-            isAllCaps = false
-        }
+        val refresh = Button(this).apply { text = "Atualizar diagnóstico da ponte"; isAllCaps = false }
         root.addView(refresh)
 
         diagnostic = TextView(this).apply {
@@ -131,6 +123,7 @@ class TextCallBridgeLabActivity : Activity() {
 
         mainPanel.setOnClickListener { startActivity(Intent(this, MainActivity::class.java)) }
         access.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        prepareQwen.setOnClickListener { startActivity(Intent(this, OfflineSofiaActivity::class.java)) }
 
         arm.setOnClickListener {
             val phrase = draft.text.toString().trim()
@@ -138,10 +131,7 @@ class TextCallBridgeLabActivity : Activity() {
                 Toast.makeText(this, "Escreve uma frase de teste", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            prefs.edit()
-                .putString("bridge_test_draft", phrase)
-                .putBoolean("bridge_arm_once", true)
-                .apply()
+            prefs.edit().putString("bridge_test_draft", phrase).putBoolean("bridge_arm_once", true).apply()
             Toast.makeText(this, "Armado. Abre Samsung Chamada de texto.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
@@ -149,26 +139,28 @@ class TextCallBridgeLabActivity : Activity() {
         aiSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("bridge_ai_enabled", checked).apply()
             if (!checked && autoSendSwitch.isChecked) autoSendSwitch.isChecked = false
-            Toast.makeText(this, if (checked) "Sofia offline ligada." else "Sofia offline desligada.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
 
         autoSendSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked && !aiSwitch.isChecked) aiSwitch.isChecked = true
             prefs.edit().putBoolean("bridge_auto_send", checked).apply()
-            Toast.makeText(this, if (checked) "Auto-envio ATIVO." else "Auto-envio desligado.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
 
         refresh.setOnClickListener { updateUi() }
-
         setContentView(ScrollView(this).apply { addView(root) })
         updateUi()
     }
 
-    override fun onResume() {
-        super.onResume()
-        updateUi()
+    override fun onResume() { super.onResume(); updateUi() }
+
+    private fun findLocalModel(): File? {
+        val saved = prefs.getString("offline_model_path", "").orEmpty().takeIf { it.isNotBlank() }?.let(::File)
+        if (saved?.exists() == true && saved.length() > 100_000_000L) return saved
+        return File(filesDir, "models").listFiles()
+            ?.filter { it.isFile && it.extension.equals("gguf", true) && it.length() > 100_000_000L }
+            ?.maxByOrNull { it.length() }
     }
 
     private fun updateUi() {
@@ -180,6 +172,7 @@ class TextCallBridgeLabActivity : Activity() {
         val candidate = prefs.getString("bridge_customer_candidate", "").orEmpty()
         val aiStatus = prefs.getString("bridge_ai_status", "").orEmpty()
         val reply = prefs.getString("bridge_last_ai_reply", "").orEmpty()
+        val model = findLocalModel()
 
         if (::aiSwitch.isInitialized && aiSwitch.isChecked != aiEnabled) aiSwitch.isChecked = aiEnabled
         if (::autoSendSwitch.isInitialized && autoSendSwitch.isChecked != autoSend) autoSendSwitch.isChecked = autoSend
@@ -187,18 +180,20 @@ class TextCallBridgeLabActivity : Activity() {
         state.text = buildString {
             append(if (enabled) "✓ Ponte de acessibilidade ATIVA" else "⚠ Ponte de acessibilidade DESLIGADA")
             append("\n")
+            append(if (model != null) "✓ Qwen/GGUF encontrado: ${model.name}" else "⚠ Qwen/GGUF não encontrado")
+            append("\n")
             append(if (armed) "● Preenchimento único ARMADO" else "Preenchimento não armado")
             append("\n")
             append(if (aiEnabled) "🤖 Qwen → Text Call ATIVO" else "Qwen → Text Call desligado")
             append("\n")
             append(if (autoSend) "📤 AUTO-ENVIO ATIVO" else "Envio manual")
-            append("\nCampos editáveis detetados: $editableCount")
+            append("\nCampos editáveis da última Chamada de texto: $editableCount")
             if (candidate.isNotBlank()) append("\nTexto candidato do cliente: $candidate")
             if (aiStatus.isNotBlank()) append("\nEstado IA: $aiStatus")
             if (reply.isNotBlank()) append("\nÚltima resposta Sofia: $reply")
         }
-        state.setTextColor(if (enabled) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
-        diagnostic.text = prefs.getString("diag_TEXT_CALL_BRIDGE", "Sem eventos da interface Samsung ainda.")
+        state.setTextColor(if (enabled && model != null) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
+        diagnostic.text = prefs.getString("diag_TEXT_CALL_BRIDGE", "Sem eventos válidos da interface Chamada de texto Samsung ainda.")
     }
 
     private fun isBridgeEnabled(): Boolean {
