@@ -41,11 +41,17 @@ class TextCallBridgeLabActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 47 · Samsung Text Call + Qwen offline"
+            text = "Build 48 · Samsung Text Call + Qwen offline"
             textSize = 13f
             setTextColor(Color.LTGRAY)
-            setPadding(0, dp(4), 0, dp(16))
+            setPadding(0, dp(4), 0, dp(12))
         })
+
+        val mainPanel = Button(this).apply {
+            text = "← Abrir painel principal da Sofia"
+            isAllCaps = false
+        }
+        root.addView(mainPanel)
 
         state = TextView(this).apply {
             textSize = 15f
@@ -93,7 +99,7 @@ class TextCallBridgeLabActivity : Activity() {
         root.addView(aiSwitch)
 
         root.addView(TextView(this).apply {
-            text = "Com esta opção ligada, a ponte tenta ler a última frase do cliente no Samsung Text Call, passa-a ao Qwen local e preenche a resposta. O Build 47 NÃO carrega no botão Enviar: confirmas manualmente antes de a voz Samsung falar para o cliente."
+            text = "Com esta opção ligada, a ponte tenta ler a última frase do cliente no Samsung Text Call, passa-a ao Qwen local e preenche a resposta. O Build 48 NÃO carrega no botão Enviar: confirmas manualmente antes de a voz Samsung falar para o cliente."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(8), 0, dp(12))
@@ -113,6 +119,8 @@ class TextCallBridgeLabActivity : Activity() {
             setBackgroundColor(Color.rgb(18, 22, 36))
         }
         root.addView(diagnostic)
+
+        mainPanel.setOnClickListener { startActivity(Intent(this, MainActivity::class.java)) }
 
         access.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
