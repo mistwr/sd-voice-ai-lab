@@ -7,13 +7,6 @@ import net.amazingapps.llama.android.core.AiChat
 import net.amazingapps.llama.android.core.InferenceEngine
 import org.json.JSONObject
 
-/**
- * Reusable on-device brain for Sofia.
- *
- * The LLM only writes the natural sentence that Sofia should say. Structured call
- * state is kept deterministic in the Android app so small local models do not have
- * to generate fragile JSON during a live phone conversation.
- */
 object SofiaLocalEngine {
     @Volatile private var loadedPath: String? = null
 
@@ -28,35 +21,24 @@ Se o cliente disser quanto paga, pergunta de forma natural o que está incluído
 Se disser o operador, usa essa informação e avança para uma pergunta útil seguinte.
 Se pedir para não ser contactado, pede desculpa de forma breve e confirma que o contacto termina.
 Não uses listas, JSON, markdown, etiquetas, raciocínio ou comentários internos.
-Não escrevas 'Sofia:' no início.
+Nunca escrevas <think>, </think>, 'Sofia:' ou raciocínio interno.
 /no_think"""
 
-    private fun engine(context: Context): InferenceEngine =
-        AiChat.getInferenceEngine(context.applicationContext)
-
+    private fun engine(context: Context): InferenceEngine = AiChat.getInferenceEngine(context.applicationContext)
     fun loadedModelPath(): String? = loadedPath
-
-    fun isReady(context: Context): Boolean =
-        loadedPath != null && engine(context).state.value is InferenceEngine.State.ModelReady
+    fun isReady(context: Context): Boolean = loadedPath != null && engine(context).state.value is InferenceEngine.State.ModelReady
 
     suspend fun load(context: Context, modelPath: String) {
         val e = engine(context)
         val firstState = e.state.first {
-            it is InferenceEngine.State.Initialized ||
-                it is InferenceEngine.State.ModelReady ||
-                it is InferenceEngine.State.Error
+            it is InferenceEngine.State.Initialized || it is InferenceEngine.State.ModelReady || it is InferenceEngine.State.Error
         }
-        if (firstState is InferenceEngine.State.Error) {
-            try { e.cleanUp() } catch (_: Throwable) {}
-        }
-
+        if (firstState is InferenceEngine.State.Error) try { e.cleanUp() } catch (_: Throwable) {}
         if (loadedPath == modelPath && e.state.value is InferenceEngine.State.ModelReady) return
-
         if (e.state.value is InferenceEngine.State.ModelReady || e.state.value is InferenceEngine.State.Error) {
             try { e.cleanUp() } catch (_: Throwable) {}
             loadedPath = null
         }
-
         e.loadModel(modelPath)
         e.setSystemPrompt(SYSTEM_PROMPT)
         loadedPath = modelPath
@@ -65,7 +47,6 @@ Não escrevas 'Sofia:' no início.
     suspend fun respond(context: Context, customerText: String, memory: JSONObject): JSONObject {
         val e = engine(context)
         check(e.state.value is InferenceEngine.State.ModelReady) { "Modelo local da Sofia ainda não está carregado." }
-
         val customer = customerText.trim()
         require(customer.isNotBlank()) { "O texto do cliente está vazio." }
 
@@ -75,51 +56,54 @@ Não escrevas 'Sofia:' no início.
             append(if (memory.length() == 0) "ainda sem dados" else memory.toString())
             append("\nCliente: ")
             append(customer)
-            append("\nResponde apenas com a próxima frase curta que a Sofia deve dizer ao cliente.")
+            append("\nResponde apenas com a próxima frase curta que a Sofia deve dizer ao cliente. Sem raciocínio interno.")
         }
 
         val out = StringBuilder()
         e.sendUserPrompt(prompt, 90).collect { token -> out.append(token) }
         var reply = cleanReply(out.toString())
-
-        // A small model occasionally echoes the input. Replace that with a safe,
-        // useful discovery question instead of speaking the echo back to the client.
-        if (isEcho(reply, customer)) {
-            reply = discoveryFallback(customer)
-        }
-        require(reply.isNotBlank()) { "O modelo local não gerou uma resposta falada." }
-
-        val outcome = classifyOutcome(customer)
-        val nextMemory = updateMemory(memory, customer)
+        if (reply.isBlank() || isEcho(reply, customer)) reply = discoveryFallback(customer)
 
         return JSONObject()
             .put("ok", true)
             .put("reply", reply)
-            .put("outcome", outcome)
-            .put("memory", nextMemory)
+            .put("outcome", classifyOutcome(customer))
+            .put("memory", updateMemory(memory, customer))
             .put("model", "LOCAL_GGUF_LLAMA_CPP")
             .put("offline", true)
     }
 
     private fun cleanReply(raw: String): String {
-        var text = raw
-            .replace(Regex("(?s)<think>.*?</think>"), "")
+        var text = raw.replace("\u0000", "").trim()
+
+        // Remove complete thinking blocks.
+        text = text.replace(Regex("(?is)<think>.*?</think>"), "").trim()
+
+        // Some Qwen builds occasionally emit an opening <think> without closing it.
+        // Never expose that internal text to the customer.
+        if (text.contains("<think>", ignoreCase = true)) {
+            val afterClose = text.substringAfterLast("</think>", "").trim()
+            text = if (afterClose.isNotBlank()) afterClose else ""
+        }
+
+        text = text
+            .replace(Regex("(?i)</?think>"), "")
             .replace(Regex("^```(?:text)?\\s*", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s*```$"), "")
+            .replace(Regex("^(Sofia|Assistente)\\s*:\\s*", RegexOption.IGNORE_CASE), "")
             .trim()
-        text = text.replace(Regex("^(Sofia|Assistente)\\s*:\\s*", RegexOption.IGNORE_CASE), "").trim()
-        val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-        return firstLine.take(320)
+
+        return text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() && !it.startsWith("<") }
+            .orEmpty()
+            .take(320)
     }
 
-    private fun normalize(text: String): String = text
-        .lowercase()
-        .replace(Regex("[^a-záàâãéêíóôõúç0-9]+"), " ")
-        .trim()
+    private fun normalize(text: String): String = text.lowercase().replace(Regex("[^a-záàâãéêíóôõúç0-9]+"), " ").trim()
 
     private fun isEcho(reply: String, customer: String): Boolean {
-        val r = normalize(reply)
-        val c = normalize(customer)
+        val r = normalize(reply); val c = normalize(customer)
         if (r.isBlank() || c.isBlank()) return false
         return r == c || (r.length >= 8 && (r.contains(c) || c.contains(r)))
     }
@@ -129,26 +113,17 @@ Não escrevas 'Sofia:' no início.
         val hasPrice = Regex("\\b\\d{1,3}(?:[,.]\\d{1,2})?\\s*(?:€|euros?)?\\b").containsMatchIn(t)
         return when {
             hasPrice -> "Perfeito. O que é que está incluído nesse valor: televisão, internet e quantos telemóveis?"
-            listOf("digi", "meo", "nos", "vodafone", "uzo", "woo", "amigo", "nowo").any { it in t } ->
-                "Perfeito. E atualmente que serviços tem nesse operador?"
+            listOf("digi", "meo", "nos", "vodafone", "uzo", "woo", "amigo", "nowo").any { it in t } -> "Perfeito. E atualmente que serviços tem nesse operador?"
             else -> "Percebi. Pode dizer-me quanto paga atualmente e que serviços tem incluídos?"
         }
     }
 
     private fun classifyOutcome(customer: String): String {
         val t = normalize(customer)
-        if (listOf("não me liguem", "nao me liguem", "não quero ser contactado", "nao quero ser contactado", "não me contacte", "nao me contacte").any { it in t }) {
-            return "DO_NOT_CALL"
-        }
-        if (listOf("ligue mais tarde", "liga mais tarde", "contacte mais tarde", "amanhã", "amanha", "depois falamos").any { it in t }) {
-            return "CALLBACK"
-        }
-        if (listOf("não estou interessado", "nao estou interessado", "não quero", "nao quero", "sem interesse").any { it in t }) {
-            return "NOT_INTERESTED"
-        }
-        if (listOf("quero aderir", "tenho interesse", "estou interessado", "pode avançar", "pode avancar", "vamos avançar", "vamos avancar").any { it in t }) {
-            return "INTERESTED"
-        }
+        if (listOf("não me liguem", "nao me liguem", "não quero ser contactado", "nao quero ser contactado", "não me contacte", "nao me contacte").any { it in t }) return "DO_NOT_CALL"
+        if (listOf("ligue mais tarde", "liga mais tarde", "contacte mais tarde", "amanhã", "amanha", "depois falamos").any { it in t }) return "CALLBACK"
+        if (listOf("não estou interessado", "nao estou interessado", "não quero", "nao quero", "sem interesse").any { it in t }) return "NOT_INTERESTED"
+        if (listOf("quero aderir", "tenho interesse", "estou interessado", "pode avançar", "pode avancar", "vamos avançar", "vamos avancar").any { it in t }) return "INTERESTED"
         return "CONTINUE"
     }
 
@@ -157,10 +132,8 @@ Não escrevas 'Sofia:' no início.
         val t = customer.lowercase()
         val operators = listOf("DIGI", "MEO", "NOS", "Vodafone", "UZO", "WOO", "Amigo", "NOWO")
         operators.firstOrNull { t.contains(it.lowercase()) }?.let { next.put("current_operator", it) }
-
         Regex("\\b(\\d{1,3}(?:[,.]\\d{1,2})?)\\s*(?:€|euros?)\\b", RegexOption.IGNORE_CASE)
             .find(customer)?.groupValues?.getOrNull(1)?.let { next.put("monthly_price", it.replace(',', '.')) }
-
         return next
     }
 }
