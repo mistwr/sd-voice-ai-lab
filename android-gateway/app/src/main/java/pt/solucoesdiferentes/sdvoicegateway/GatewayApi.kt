@@ -17,7 +17,7 @@ object GatewayApi {
         return (URL(base + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000
-            readTimeout = 30_000
+            readTimeout = 45_000
             doOutput = true
             setRequestProperty("Content-Type", contentType)
             setRequestProperty("x-device-key", prefs.getString("device_key", "") ?: "")
@@ -40,6 +40,15 @@ object GatewayApi {
             .put("payload", payload)
         conn.outputStream.use { it.write(body.toString().toByteArray()) }
         readJson(conn)
+    }
+
+    fun sofiaRespond(context: Context, customerText: String, memory: JSONObject = JSONObject()): JSONObject {
+        val conn = connection(context, "/api/sofia/respond")
+        val body = JSONObject()
+            .put("text", customerText)
+            .put("memory", memory)
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+        return readJson(conn)
     }
 
     fun uploadRecording(context: Context, file: File, callId: String?, commandId: String?, durationMs: Long): JSONObject {
