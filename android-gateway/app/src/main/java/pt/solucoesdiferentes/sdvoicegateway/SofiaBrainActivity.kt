@@ -1,6 +1,7 @@
 package pt.solucoesdiferentes.sdvoicegateway
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -41,10 +42,31 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 42 · Teste do LLM antes de ligar o áudio GSM"
+            text = "Build 43 · Offline primeiro · cloud como fallback"
             textSize = 13f
             setTextColor(Color.LTGRAY)
-            setPadding(0, dp(4), 0, dp(18))
+            setPadding(0, dp(4), 0, dp(14))
+        })
+
+        val offline = Button(this).apply {
+            text = "📱  Sofia Offline · 0 €/pedido"
+            isAllCaps = false
+            textSize = 17f
+        }
+        root.addView(offline)
+        root.addView(TextView(this).apply {
+            text = "Qwen3 1.7B GGUF no próprio telemóvel; também permite importar outros modelos GGUF."
+            textSize = 12f
+            setTextColor(Color.rgb(151, 164, 207))
+            setPadding(0, dp(6), 0, dp(18))
+        })
+
+        root.addView(TextView(this).apply {
+            text = "Teste cloud / servidor"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 0, 0, dp(8))
         })
 
         input = EditText(this).apply {
@@ -59,7 +81,7 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
         root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val ask = Button(this).apply {
-            text = "🤖  Sofia responder e falar"
+            text = "☁️  Sofia responder via LLM cloud e falar"
             isAllCaps = false
             textSize = 17f
         }
@@ -83,12 +105,13 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
         root.addView(response)
 
         root.addView(TextView(this).apply {
-            text = "Este ecrã valida cérebro + TTS. A voz ainda não é injetada no uplink GSM: o Build 40 confirmou que o Android redireciona o TX para o auricular em vez de TELEPHONY. Assim que encontrarmos a rota Samsung, este mesmo cérebro passa a falar com o cliente em direto."
+            text = "O cérebro e o TTS já podem funcionar localmente ou por cloud. A voz ainda não é injetada diretamente no uplink GSM porque o Android continua a redirecionar o TX para o auricular em vez de TELEPHONY."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(18), 0, 0)
         })
 
+        offline.setOnClickListener { startActivity(Intent(this, OfflineSofiaActivity::class.java)) }
         ask.setOnClickListener { askSofia() }
         setContentView(ScrollView(this).apply { addView(root) })
     }
@@ -113,7 +136,7 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
             return
         }
 
-        status.text = "Sofia está a pensar…"
+        status.text = "Sofia está a pensar via cloud…"
         response.text = "…"
         Thread {
             try {
@@ -124,7 +147,7 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
                 val outcome = result.optString("outcome", "CONTINUE")
                 runOnUiThread {
                     response.text = reply
-                    status.text = "LLM respondeu · $outcome"
+                    status.text = "LLM cloud respondeu · $outcome"
                     if (reply.isNotBlank() && ttsReady) {
                         tts?.speak(reply, TextToSpeech.QUEUE_FLUSH, null, "sofia-reply-${System.currentTimeMillis()}")
                         status.text = "Sofia a falar… · $outcome"
@@ -135,7 +158,7 @@ class SofiaBrainActivity : Activity(), TextToSpeech.OnInitListener {
             } catch (t: Throwable) {
                 runOnUiThread {
                     response.text = ""
-                    status.text = "Erro Sofia: ${t.message ?: t.javaClass.simpleName}"
+                    status.text = "Erro Sofia cloud: ${t.message ?: t.javaClass.simpleName}"
                 }
             }
         }.start()
