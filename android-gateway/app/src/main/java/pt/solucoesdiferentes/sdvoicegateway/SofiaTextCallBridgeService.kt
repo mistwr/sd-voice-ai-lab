@@ -3,6 +3,8 @@ package pt.solucoesdiferentes.sdvoicegateway
 import android.accessibilityservice.AccessibilityService
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -19,6 +21,7 @@ import java.io.File
 class SofiaTextCallBridgeService : AccessibilityService() {
     private val prefs by lazy { getSharedPreferences("gateway", MODE_PRIVATE) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile private var aiBusy = false
     @Volatile private var lastCustomerText = ""
@@ -38,9 +41,9 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             .putBoolean("bridge_service_connected", true)
             .putString("diag_TEXT_CALL_BRIDGE", JSONObject()
                 .put("service_connected", true)
-                .put("mode", "TEXT_CALL_BRIDGE_47")
+                .put("mode", "TEXT_CALL_BRIDGE_49")
                 .put("ai_enabled", prefs.getBoolean("bridge_ai_enabled", false))
-                .put("auto_send", false)
+                .put("auto_send", prefs.getBoolean("bridge_auto_send", false))
                 .toString())
             .apply()
         Toast.makeText(this, "Sofia Text Call Bridge ativo", Toast.LENGTH_SHORT).show()
@@ -60,7 +63,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
         val customerCandidate = pickCustomerText(visibleTexts)
         val snapshot = JSONObject()
-            .put("mode", "TEXT_CALL_BRIDGE_47")
+            .put("mode", "TEXT_CALL_BRIDGE_49")
             .put("package", pkg)
             .put("event_type", event.eventType)
             .put("event_time", event.eventTime)
@@ -71,7 +74,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             .put("nodes", nodes)
             .put("ai_enabled", prefs.getBoolean("bridge_ai_enabled", false))
             .put("ai_busy", aiBusy)
-            .put("auto_send", false)
+            .put("auto_send", prefs.getBoolean("bridge_auto_send", false))
 
         var fillResult: Boolean? = null
         if (prefs.getBoolean("bridge_arm_once", false) && editableCandidates.isNotEmpty()) {
@@ -91,11 +94,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
                 if (fillResult) {
                     prefs.edit().putBoolean("bridge_arm_once", false).apply()
-                    Toast.makeText(
-                        this,
-                        "Sofia preencheu a resposta. Não enviou automaticamente.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Sofia preencheu a resposta.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -146,6 +145,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
                 if (reply.isBlank()) throw IllegalStateException("Resposta local vazia")
 
                 val fill = fillFreshEditable(reply)
+                val autoSend = prefs.getBoolean("bridge_auto_send", false)
                 prefs.edit()
                     .putString("bridge_last_ai_reply", reply)
                     .putString("bridge_ai_status", if (fill) "Resposta pronta na caixa Samsung" else "Resposta gerada; campo Samsung não encontrado")
@@ -153,11 +153,14 @@ class SofiaTextCallBridgeService : AccessibilityService() {
                     .putString("bridge_last_ai_outcome", result.optString("outcome", "CONTINUE"))
                     .apply()
 
-                if (fill) {
+                if (fill && autoSend) {
+                    prefs.edit().putString("bridge_ai_status", "Resposta preenchida; a procurar botão Enviar…").apply()
+                    mainHandler.postDelayed({ guardedAutoSend(reply) }, 450L)
+                } else if (fill) {
                     Toast.makeText(
                         this@SofiaTextCallBridgeService,
-                        "Sofia respondeu offline. Revê e envia manualmente.",
-                        Toast.LENGTH_LONG
+                        "Sofia respondeu offline. Envio manual ativo.",
+                        Toast.LENGTH_SHORT
                     ).show()
                 }
             } catch (t: Throwable) {
@@ -167,6 +170,79 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             } finally {
                 aiBusy = false
             }
+        }
+    }
+
+    private fun guardedAutoSend(expectedReply: String) {
+        if (!prefs.getBoolean("bridge_auto_send", false)) return
+        val root = rootInActiveWindow ?: run {
+            prefs.edit().putString("bridge_ai_status", "Auto-envio: janela Samsung não encontrada").apply()
+            return
+        }
+
+        val editable = findReplyEditable(root)
+        val current = editable?.text?.toString()?.trim().orEmpty()
+        if (current.isBlank() || current != expectedReply.trim()) {
+            prefs.edit().putString("bridge_ai_status", "Auto-envio bloqueado: texto da caixa não corresponde à resposta da Sofia").apply()
+            return
+        }
+
+        val send = findSendNode(root)
+        if (send == null) {
+            prefs.edit().putString("bridge_ai_status", "Auto-envio bloqueado: botão Enviar não identificado com segurança").apply()
+            return
+        }
+
+        val clicked = try { send.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (_: Throwable) { false }
+        prefs.edit()
+            .putBoolean("bridge_last_auto_send_result", clicked)
+            .putLong("bridge_last_auto_send_at", System.currentTimeMillis())
+            .putString("bridge_ai_status", if (clicked) "✓ Sofia enviou a resposta automaticamente" else "Auto-envio falhou ao clicar em Enviar")
+            .apply()
+
+        if (clicked) Toast.makeText(this, "Sofia enviou automaticamente ✓", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun findReplyEditable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val candidates = mutableListOf<AccessibilityNodeInfo>()
+        collectEditableNodes(root, candidates, 0)
+        return candidates.firstOrNull { node ->
+            val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) node.hintText?.toString().orEmpty() else ""
+            val desc = node.contentDescription?.toString().orEmpty()
+            hint.contains("Escrever resposta", true) || hint.contains("Write response", true) || desc.contains("resposta", true)
+        } ?: candidates.firstOrNull()
+    }
+
+    private fun findSendNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 18) return
+            val text = node.text?.toString()?.trim().orEmpty()
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            val id = node.viewIdResourceName.orEmpty()
+            val labelMatch = text.equals("Enviar", true) || text.equals("Send", true) ||
+                desc.equals("Enviar", true) || desc.equals("Send", true) ||
+                desc.contains("Enviar", true) || desc.contains("Send", true)
+            val idMatch = id.contains("send", true) || id.contains("submit", true)
+            if (node.isClickable && node.isEnabled && (labelMatch || idMatch)) {
+                matches += AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                try { walk(child, depth + 1) } finally { child.recycle() }
+            }
+        }
+        walk(root, 0)
+        return if (matches.size == 1) matches.first() else null
+    }
+
+    private fun collectEditableNodes(node: AccessibilityNodeInfo, out: MutableList<AccessibilityNodeInfo>, depth: Int) {
+        if (depth > 18) return
+        val cls = node.className?.toString().orEmpty()
+        if (node.isEditable || cls.contains("EditText", true)) out += AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            try { collectEditableNodes(child, out, depth + 1) } finally { child.recycle() }
         }
     }
 
@@ -212,9 +288,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
         val text = node.text?.toString()?.trim().orEmpty()
         val desc = node.contentDescription?.toString()?.trim().orEmpty()
-        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            node.hintText?.toString()?.trim().orEmpty()
-        } else ""
+        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) node.hintText?.toString()?.trim().orEmpty() else ""
         val cls = node.className?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
 
@@ -241,11 +315,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            try {
-                collectNodes(child, out, visibleTexts, editables, depth + 1)
-            } finally {
-                child.recycle()
-            }
+            try { collectNodes(child, out, visibleTexts, editables, depth + 1) } finally { child.recycle() }
         }
     }
 
@@ -255,9 +325,7 @@ class SofiaTextCallBridgeService : AccessibilityService() {
             val text = node.text?.toString().orEmpty()
             val desc = node.contentDescription?.toString().orEmpty()
             listOf(hint, text, desc).any {
-                it.contains("Escrever resposta", true) ||
-                    it.contains("Write response", true) ||
-                    it.contains("resposta", true)
+                it.contains("Escrever resposta", true) || it.contains("Write response", true) || it.contains("resposta", true)
             }
         } ?: candidates.first()
     }
@@ -277,14 +345,12 @@ class SofiaTextCallBridgeService : AccessibilityService() {
     private fun pickCustomerText(texts: List<String>): String? {
         val ignored = setOf(
             "em linha.", "em linha", "repetir", "urgente?", "ligar-lhe mais tarde",
-            "escrever resposta", "teclado", "mais", "chamada de texto"
+            "escrever resposta", "teclado", "mais", "chamada de texto", "enviar", "send"
         )
         return texts.asReversed().firstOrNull { raw ->
             val t = raw.trim()
-            t.length >= 4 &&
-                t.lowercase() !in ignored &&
-                !t.matches(Regex("^\\d{1,2}:\\d{2}$")) &&
-                !t.matches(Regex("^\\d{1,3}%$"))
+            t.length >= 4 && t.lowercase() !in ignored &&
+                !t.matches(Regex("^\\d{1,2}:\\d{2}$")) && !t.matches(Regex("^\\d{1,3}%$"))
         }
     }
 }
