@@ -7,23 +7,21 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
-import android.view.ViewGroup
+import android.view.View
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Switch
 import android.widget.TextView
-import android.widget.Toast
 import java.io.File
 
 class TextCallBridgeLabActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("gateway", MODE_PRIVATE) }
-    private lateinit var state: TextView
+    private lateinit var status: TextView
+    private lateinit var primary: Button
+    private lateinit var modelButton: Button
+    private lateinit var accessButton: Button
+    private lateinit var diagnosticButton: Button
     private lateinit var diagnostic: TextView
-    private lateinit var draft: EditText
-    private lateinit var aiSwitch: Switch
-    private lateinit var autoSendSwitch: Switch
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -32,128 +30,134 @@ class TextCallBridgeLabActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(28), dp(20), dp(28))
+            setPadding(dp(20), dp(30), dp(20), dp(30))
             setBackgroundColor(Color.rgb(10, 13, 24))
         }
 
         root.addView(TextView(this).apply {
-            text = "SOFIA · TEXT CALL BRIDGE"
-            textSize = 25f
+            text = "SOFIA"
+            textSize = 32f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Build 50 · Samsung Text Call + Qwen + auto-envio"
-            textSize = 13f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(4), 0, dp(12))
+            text = "Build 51 · chamadas automáticas no Samsung"
+            textSize = 14f
+            setTextColor(Color.rgb(151, 164, 207))
+            setPadding(0, dp(4), 0, dp(18))
         })
 
-        val mainPanel = Button(this).apply { text = "← Abrir painel principal da Sofia"; isAllCaps = false }
-        root.addView(mainPanel)
-
-        state = TextView(this).apply {
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setPadding(dp(14), dp(14), dp(14), dp(14))
+        status = TextView(this).apply {
+            textSize = 17f
+            setPadding(dp(16), dp(16), dp(16), dp(16))
             setBackgroundColor(Color.rgb(25, 29, 46))
         }
-        root.addView(state)
-
-        val access = Button(this).apply { text = "1 · Ativar ponte de acessibilidade"; isAllCaps = false }
-        root.addView(access)
-
-        val prepareQwen = Button(this).apply { text = "🧠 Preparar / carregar Qwen local"; isAllCaps = false }
-        root.addView(prepareQwen)
+        root.addView(status)
 
         root.addView(TextView(this).apply {
-            text = "Frase de teste a preencher na caixa ‘Escrever resposta’"
+            text = "A Sofia usa a Chamada de texto Samsung para ouvir o cliente, o Qwen local para responder e a voz Samsung para falar. Quando estiver pronta, basta abrir o Telefone Samsung e iniciar a Chamada de texto."
             textSize = 13f
             setTextColor(Color.LTGRAY)
-            setPadding(0, dp(14), 0, dp(6))
+            setPadding(0, dp(14), 0, dp(14))
         })
 
-        draft = EditText(this).apply {
-            setText(prefs.getString("bridge_test_draft", "Olá, sou a Sofia, assistente virtual."))
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            setBackgroundColor(Color.rgb(25, 29, 46))
+        primary = Button(this).apply {
+            isAllCaps = false
+            textSize = 18f
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            minLines = 2
         }
-        root.addView(draft, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(primary)
 
-        val arm = Button(this).apply { text = "2 · Armar preenchimento único"; isAllCaps = false }
-        root.addView(arm)
-
-        aiSwitch = Switch(this).apply {
-            text = "3 · Sofia offline automática"
-            setTextColor(Color.WHITE)
-            isChecked = prefs.getBoolean("bridge_ai_enabled", false)
-            setPadding(0, dp(12), 0, dp(6))
+        val phone = Button(this).apply {
+            text = "📞 Abrir Telefone Samsung"
+            isAllCaps = false
+            textSize = 17f
         }
-        root.addView(aiSwitch)
+        root.addView(phone)
 
-        autoSendSwitch = Switch(this).apply {
-            text = "4 · ENVIAR automaticamente pela voz Samsung"
-            setTextColor(Color.WHITE)
-            isChecked = prefs.getBoolean("bridge_auto_send", false)
-            setPadding(0, dp(6), 0, dp(8))
+        accessButton = Button(this).apply {
+            text = "Permitir acessibilidade"
+            isAllCaps = false
+            visibility = View.GONE
         }
-        root.addView(autoSendSwitch)
+        root.addView(accessButton)
 
-        root.addView(TextView(this).apply {
-            text = "Build 50 só aceita texto quando deteta a interface real da Chamada de texto. O ecrã Recentes/Contactos já não substitui o diagnóstico útil da chamada. O auto-envio continua protegido: só envia se a caixa contiver exatamente a resposta da Sofia e existir um único botão Enviar/Send identificável."
-            textSize = 12f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(8), 0, dp(12))
-        })
+        modelButton = Button(this).apply {
+            text = "🧠 Preparar Qwen local"
+            isAllCaps = false
+            visibility = View.GONE
+        }
+        root.addView(modelButton)
 
-        val refresh = Button(this).apply { text = "Atualizar diagnóstico da ponte"; isAllCaps = false }
-        root.addView(refresh)
+        diagnosticButton = Button(this).apply {
+            text = "Diagnóstico técnico"
+            isAllCaps = false
+        }
+        root.addView(diagnosticButton)
 
         diagnostic = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.rgb(230, 235, 250))
+            textSize = 11f
+            setTextColor(Color.rgb(220, 225, 240))
             setTextIsSelectable(true)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setBackgroundColor(Color.rgb(18, 22, 36))
+            visibility = View.GONE
         }
         root.addView(diagnostic)
 
-        mainPanel.setOnClickListener { startActivity(Intent(this, MainActivity::class.java)) }
-        access.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        prepareQwen.setOnClickListener { startActivity(Intent(this, OfflineSofiaActivity::class.java)) }
+        primary.setOnClickListener {
+            val enabled = isBridgeEnabled()
+            val model = findLocalModel()
+            val running = prefs.getBoolean("bridge_ai_enabled", false) && prefs.getBoolean("bridge_auto_send", false)
 
-        arm.setOnClickListener {
-            val phrase = draft.text.toString().trim()
-            if (phrase.isBlank()) {
-                Toast.makeText(this, "Escreve uma frase de teste", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+            when {
+                running -> {
+                    prefs.edit()
+                        .putBoolean("bridge_ai_enabled", false)
+                        .putBoolean("bridge_auto_send", false)
+                        .putBoolean("bridge_arm_once", false)
+                        .apply()
+                }
+                !enabled -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                model == null -> startActivity(Intent(this, OfflineSofiaActivity::class.java))
+                else -> {
+                    prefs.edit()
+                        .putString("offline_model_path", model.absolutePath)
+                        .putBoolean("bridge_ai_enabled", true)
+                        .putBoolean("bridge_auto_send", true)
+                        .putBoolean("bridge_arm_once", false)
+                        .putString("bridge_ai_status", "Sofia automática pronta · à espera da Chamada de texto")
+                        .apply()
+                }
             }
-            prefs.edit().putString("bridge_test_draft", phrase).putBoolean("bridge_arm_once", true).apply()
-            Toast.makeText(this, "Armado. Abre Samsung Chamada de texto.", Toast.LENGTH_SHORT).show()
             updateUi()
         }
 
-        aiSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean("bridge_ai_enabled", checked).apply()
-            if (!checked && autoSendSwitch.isChecked) autoSendSwitch.isChecked = false
+        phone.setOnClickListener {
+            val launch = packageManager.getLaunchIntentForPackage("com.samsung.android.dialer")
+            if (launch != null) startActivity(launch)
+            else startActivity(Intent(Intent.ACTION_DIAL))
+        }
+
+        accessButton.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        modelButton.setOnClickListener { startActivity(Intent(this, OfflineSofiaActivity::class.java)) }
+        diagnosticButton.setOnClickListener {
+            diagnostic.visibility = if (diagnostic.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             updateUi()
         }
 
-        autoSendSwitch.setOnCheckedChangeListener { _, checked ->
-            if (checked && !aiSwitch.isChecked) aiSwitch.isChecked = true
-            prefs.edit().putBoolean("bridge_auto_send", checked).apply()
-            updateUi()
-        }
-
-        refresh.setOnClickListener { updateUi() }
         setContentView(ScrollView(this).apply { addView(root) })
         updateUi()
     }
 
-    override fun onResume() { super.onResume(); updateUi() }
+    override fun onResume() {
+        super.onResume()
+        val model = findLocalModel()
+        if (isBridgeEnabled() && model != null && prefs.getBoolean("bridge_ai_enabled", false)) {
+            prefs.edit().putString("offline_model_path", model.absolutePath).apply()
+        }
+        updateUi()
+    }
 
     private fun findLocalModel(): File? {
         val saved = prefs.getString("offline_model_path", "").orEmpty().takeIf { it.isNotBlank() }?.let(::File)
@@ -164,36 +168,37 @@ class TextCallBridgeLabActivity : Activity() {
     }
 
     private fun updateUi() {
-        val enabled = isBridgeEnabled()
-        val armed = prefs.getBoolean("bridge_arm_once", false)
-        val aiEnabled = prefs.getBoolean("bridge_ai_enabled", false)
-        val autoSend = prefs.getBoolean("bridge_auto_send", false)
-        val editableCount = prefs.getInt("bridge_editable_count", 0)
-        val candidate = prefs.getString("bridge_customer_candidate", "").orEmpty()
-        val aiStatus = prefs.getString("bridge_ai_status", "").orEmpty()
-        val reply = prefs.getString("bridge_last_ai_reply", "").orEmpty()
+        val access = isBridgeEnabled()
         val model = findLocalModel()
+        val ai = prefs.getBoolean("bridge_ai_enabled", false)
+        val autoSend = prefs.getBoolean("bridge_auto_send", false)
+        val running = access && model != null && ai && autoSend
+        val aiStatus = prefs.getString("bridge_ai_status", "").orEmpty()
+        val customer = prefs.getString("bridge_customer_candidate", "").orEmpty()
+        val reply = prefs.getString("bridge_last_ai_reply", "").orEmpty()
 
-        if (::aiSwitch.isInitialized && aiSwitch.isChecked != aiEnabled) aiSwitch.isChecked = aiEnabled
-        if (::autoSendSwitch.isInitialized && autoSendSwitch.isChecked != autoSend) autoSendSwitch.isChecked = autoSend
-
-        state.text = buildString {
-            append(if (enabled) "✓ Ponte de acessibilidade ATIVA" else "⚠ Ponte de acessibilidade DESLIGADA")
+        status.text = buildString {
+            append(if (access) "✓ Ponte Samsung ativa" else "⚠ Falta permitir acessibilidade")
             append("\n")
-            append(if (model != null) "✓ Qwen/GGUF encontrado: ${model.name}" else "⚠ Qwen/GGUF não encontrado")
+            append(if (model != null) "✓ Qwen local pronto" else "⚠ Falta preparar o Qwen")
             append("\n")
-            append(if (armed) "● Preenchimento único ARMADO" else "Preenchimento não armado")
-            append("\n")
-            append(if (aiEnabled) "🤖 Qwen → Text Call ATIVO" else "Qwen → Text Call desligado")
-            append("\n")
-            append(if (autoSend) "📤 AUTO-ENVIO ATIVO" else "Envio manual")
-            append("\nCampos editáveis da última Chamada de texto: $editableCount")
-            if (candidate.isNotBlank()) append("\nTexto candidato do cliente: $candidate")
-            if (aiStatus.isNotBlank()) append("\nEstado IA: $aiStatus")
-            if (reply.isNotBlank()) append("\nÚltima resposta Sofia: $reply")
+            append(if (running) "● SOFIA AUTOMÁTICA ATIVA" else "Sofia parada")
+            if (aiStatus.isNotBlank()) append("\n\n$aiStatus")
+            if (customer.isNotBlank()) append("\nCliente: $customer")
+            if (reply.isNotBlank()) append("\nSofia: $reply")
         }
-        state.setTextColor(if (enabled && model != null) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
-        diagnostic.text = prefs.getString("diag_TEXT_CALL_BRIDGE", "Sem eventos válidos da interface Chamada de texto Samsung ainda.")
+        status.setTextColor(if (running) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
+
+        primary.text = when {
+            running -> "■ PARAR SOFIA"
+            !access -> "ATIVAR SOFIA · permitir acessibilidade"
+            model == null -> "ATIVAR SOFIA · preparar Qwen"
+            else -> "▶ ATIVAR SOFIA AUTOMÁTICA"
+        }
+
+        accessButton.visibility = if (!access) View.VISIBLE else View.GONE
+        modelButton.visibility = if (model == null) View.VISIBLE else View.GONE
+        diagnostic.text = prefs.getString("diag_TEXT_CALL_BRIDGE", "Sem diagnóstico de Chamada de texto ainda.")
     }
 
     private fun isBridgeEnabled(): Boolean {
