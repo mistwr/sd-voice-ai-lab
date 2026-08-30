@@ -27,6 +27,7 @@ class MainActivity : Activity() {
     private lateinit var techPanel: LinearLayout
     private lateinit var setupButton: Button
     private lateinit var roleState: TextView
+    private lateinit var callAssistState: TextView
     private lateinit var recordingInfo: TextView
     private var player: MediaPlayer? = null
 
@@ -63,17 +64,35 @@ class MainActivity : Activity() {
 
         val hero = card()
         hero.addView(text("●  Sofia", 20f, true).apply { setTextColor(Color.rgb(117, 235, 180)) })
-        hero.addView(text("Samsung Gateway · Build 42", 13f).apply { setTextColor(Color.LTGRAY) })
-        roleState = text("A verificar controlo de chamadas…", 14f).apply { setPadding(0, dp(10), 0, dp(8)) }
+        hero.addView(text("Samsung Gateway · Build 44 · Call Assist", 13f).apply { setTextColor(Color.LTGRAY) })
+        roleState = text("A verificar modo de chamadas…", 14f).apply { setPadding(0, dp(10), 0, dp(8)) }
         hero.addView(roleState)
-        setupButton = button("✓  Ativar Sofia nas chamadas")
+        setupButton = button("Usar modo Gateway direto")
         hero.addView(setupButton)
         root.addView(hero)
 
         root.addView(Space(this).apply { minimumHeight = dp(14) })
+        val samsungCard = card()
+        samsungCard.addView(text("🍒 Samsung Call Assist · rota no-root", 19f, true))
+        callAssistState = text("A detetar Call Assist…", 13f).apply {
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        samsungCard.addView(callAssistState)
+        samsungCard.addView(text(
+            "O Galaxy S26 tem Chamada de texto: o sistema Samsung ouve o cliente, mostra a transcrição e envia voz sintetizada para a chamada. Este modo testa essa via privilegiada mantendo o Telefone Samsung como aplicação de chamadas.",
+            12f
+        ).apply { setTextColor(Color.LTGRAY) })
+        val defaultApps = button("📱  Escolher app de telefone predefinida")
+        val callAssistSettings = button("⚙  Ver Samsung Call Assist")
+        samsungCard.addView(defaultApps)
+        samsungCard.addView(callAssistSettings)
+        root.addView(samsungCard)
+
+        root.addView(Space(this).apply { minimumHeight = dp(14) })
         val aiCard = card()
         aiCard.addView(text("IA durante a chamada", 19f, true))
-        val brainButton = button("🧠  Testar Sofia · LLM + voz")
+        val brainButton = button("🧠  Testar Sofia · LLM + voz / Offline")
         aiCard.addView(brainButton)
         val recordSwitch = Switch(this).apply {
             text = "Gravar chamada"
@@ -135,8 +154,14 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_PHONE
         }
         callCard.addView(testNumber)
-        val testCall = button("📞  Ligar com Sofia")
+        val testCall = button("📞  Ligar · modo Gateway direto")
+        val samsungCall = button("🍒  Ligar · Samsung Call Assist")
         callCard.addView(testCall)
+        callCard.addView(samsungCall)
+        callCard.addView(text(
+            "Teste Samsung: seleciona primeiro o Telefone Samsung como predefinido. Depois da chamada atender, abre Assistente de chamadas → Chamada de texto e escreve uma frase. Se a outra pessoa ouvir a voz IA e a resposta dela aparecer em texto, encontrámos RX + TX no-root pelo sistema Samsung.",
+            12f
+        ).apply { setTextColor(Color.LTGRAY) })
         status = text("Gateway parado", 13f).apply {
             setPadding(0, dp(10), 0, 0)
             setTextColor(Color.LTGRAY)
@@ -170,7 +195,7 @@ class MainActivity : Activity() {
         }
         val save = button("Guardar e iniciar gateway")
         val settings = button("Abrir definições da aplicação")
-        val refresh = button("Ver diagnóstico Build 42 — IA/recording/TX")
+        val refresh = button("Ver diagnóstico Build 44 — Call Assist / IA / TX")
         diagnostics = text("Diagnóstico: ainda sem dados", 12f).apply {
             setTextIsSelectable(true)
             setPadding(0, dp(12), 0, 0)
@@ -179,6 +204,8 @@ class MainActivity : Activity() {
         root.addView(techPanel)
 
         setupButton.setOnClickListener { requestDialerRole() }
+        defaultApps.setOnClickListener { openDefaultApps() }
+        callAssistSettings.setOnClickListener { openCallAssistSettings() }
         techToggle.setOnClickListener { techPanel.visibility = if (techPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         settings.setOnClickListener { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
         save.setOnClickListener {
@@ -190,7 +217,8 @@ class MainActivity : Activity() {
             startGatewayWhenPermitted()
         }
         testCall.setOnClickListener { placeTestCall(testNumber.text.toString()) }
-        refresh.setOnClickListener { showDiagnostics(); updateRecordingUi() }
+        samsungCall.setOnClickListener { placeSamsungCall(testNumber.text.toString()) }
+        refresh.setOnClickListener { showDiagnostics(); updateRecordingUi(); updateSamsungCallAssistUi() }
         listen.setOnClickListener { playLatestRecording() }
         share.setOnClickListener { shareLatestRecording() }
         resend.setOnClickListener { uploadLatestRecording() }
@@ -198,11 +226,13 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(root) })
         updateRoleUi()
         updateRecordingUi()
+        updateSamsungCallAssistUi()
     }
 
     override fun onResume() {
         super.onResume()
         updateRoleUi()
+        updateSamsungCallAssistUi()
         showDiagnostics()
         updateRecordingUi()
     }
@@ -220,10 +250,52 @@ class MainActivity : Activity() {
 
     private fun updateRoleUi() {
         val held = hasDialerRole()
-        roleState.text = if (held) "✓ Sofia controla as chamadas deste telemóvel" else "⚠ Falta autorizar a Sofia como aplicação de chamadas"
+        roleState.text = if (held) {
+            "✓ Modo Gateway direto ativo · Sofia é o dialer predefinido"
+        } else {
+            "Modo Gateway direto desligado · podes usar a rota Samsung Call Assist"
+        }
         roleState.setTextColor(if (held) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
-        setupButton.text = if (held) "✓ Sofia ativada nas chamadas" else "Ativar Sofia nas chamadas"
+        setupButton.text = if (held) "✓ Modo Gateway direto ativo" else "Usar modo Gateway direto"
         setupButton.isEnabled = !held
+    }
+
+    private fun updateSamsungCallAssistUi() {
+        try {
+            val snapshot = SamsungCallAssistDiagnostics.snapshot(this)
+            prefs.edit().putString("diag_SAMSUNG_CALL_ASSIST", snapshot.toString()).apply()
+            val defaultDialer = snapshot.optString("default_dialer", "desconhecido")
+            val installed = SamsungCallAssistDiagnostics.hasCallAssistant(this)
+            callAssistState.text = if (installed) {
+                "✓ Samsung Call Assist encontrado\nDialer atual: $defaultDialer"
+            } else {
+                "⚠ Pacote Samsung Call Assist não foi visível/detetado\nDialer atual: $defaultDialer"
+            }
+            callAssistState.setTextColor(if (installed) Color.rgb(117, 235, 180) else Color.rgb(255, 196, 96))
+        } catch (t: Throwable) {
+            callAssistState.text = "Diagnóstico Call Assist falhou: ${t.message ?: t.javaClass.simpleName}"
+        }
+    }
+
+    private fun openDefaultApps() {
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        } catch (t: Throwable) {
+            status.text = "Não consegui abrir apps predefinidas: ${t.message ?: t.javaClass.simpleName}"
+        }
+    }
+
+    private fun openCallAssistSettings() {
+        val pkg = "com.samsung.android.callassistant"
+        if (!SamsungCallAssistDiagnostics.hasCallAssistant(this)) {
+            status.text = "Samsung Call Assist não foi detetado como pacote visível"
+            return
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg")))
+        } catch (t: Throwable) {
+            status.text = "Não consegui abrir Call Assist: ${t.message ?: t.javaClass.simpleName}"
+        }
     }
 
     private fun updateRecordingUi() {
@@ -327,35 +399,65 @@ class MainActivity : Activity() {
     private fun showDiagnostics() {
         val names = listOf(
             "CALL", "STATE", "AI_SESSION_STARTED", "CALL_RECORDING_STARTED", "CALL_RECORDING_STOPPED",
-            "RECORDING_UPLOAD", "RECORDING_UPLOADED", "TRANSCRIPTION_REQUESTED", "DEVICE_CAPABILITY",
+            "RECORDING_UPLOAD", "RECORDING_UPLOADED", "TRANSCRIPTION_REQUESTED", "SAMSUNG_CALL_ASSIST", "DEVICE_CAPABILITY",
             "STOCK_AUDIO_ROUTE_CAPABILITY", "TELEPHONY_PCM_CAPABILITY", "TELEPHONY_TX_CAPABILITY", "AUDIO_CAPABILITY",
             "DEVICE_CAPABILITY_HTTP_ERROR", "STOCK_AUDIO_ROUTE_CAPABILITY_HTTP_ERROR", "TELEPHONY_PCM_CAPABILITY_HTTP_ERROR",
             "TELEPHONY_TX_CAPABILITY_HTTP_ERROR", "AUDIO_CAPABILITY_HTTP_ERROR"
         )
         val out = names.mapNotNull { n -> prefs.getString("diag_$n", null)?.let { "$n:\n$it" } }.joinToString("\n\n")
-        diagnostics.text = if (out.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM — BUILD 42 IA / RECORDING / TX\n\n$out"
+        diagnostics.text = if (out.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM — BUILD 44 CALL ASSIST / IA / TX\n\n$out"
+    }
+
+    private fun cleanNumber(raw: String): String = raw.trim().replace(" ", "")
+
+    private fun ensureCallPermission(): Boolean {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CALL_PHONE), 100)
+            return false
+        }
+        return true
     }
 
     private fun placeTestCall(raw: String) {
         if (!hasDialerRole()) {
-            status.text = "Primeiro toca em ‘Ativar Sofia nas chamadas’"
+            status.text = "Para o modo Gateway direto, ativa primeiro a Sofia como app de telefone"
             requestDialerRole()
             return
         }
-        val number = raw.trim().replace(" ", "")
+        val number = cleanNumber(raw)
         if (number.isBlank()) {
             status.text = "Introduz o número do cliente"
             return
         }
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CALL_PHONE), 100)
-            return
-        }
+        if (!ensureCallPermission()) return
         try {
-            status.text = "Sofia está a iniciar a chamada…"
+            status.text = "Sofia está a iniciar a chamada em modo Gateway…"
             getSystemService(TelecomManager::class.java).placeCall(Uri.fromParts("tel", number, null), Bundle())
         } catch (t: Throwable) {
             status.text = "Erro GSM: ${t.message ?: "sem detalhe"}"
+        }
+    }
+
+    private fun placeSamsungCall(raw: String) {
+        val number = cleanNumber(raw)
+        if (number.isBlank()) {
+            status.text = "Introduz o número do cliente"
+            return
+        }
+        if (!ensureCallPermission()) return
+        val telecom = getSystemService(TelecomManager::class.java)
+        val defaultDialer = telecom.defaultDialerPackage ?: ""
+        if (defaultDialer == packageName) {
+            status.text = "Seleciona o Telefone Samsung como app de telefone predefinida para testar Call Assist / Chamada de texto"
+            openDefaultApps()
+            return
+        }
+        try {
+            status.text = "A iniciar pelo dialer do sistema: $defaultDialer"
+            telecom.placeCall(Uri.fromParts("tel", number, null), Bundle())
+            Toast.makeText(this, "Quando atender: Assistente de chamadas → Chamada de texto", Toast.LENGTH_LONG).show()
+        } catch (t: Throwable) {
+            status.text = "Erro no modo Samsung: ${t.message ?: t.javaClass.simpleName}"
         }
     }
 
@@ -382,7 +484,8 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 200) {
             updateRoleUi()
-            status.text = if (hasDialerRole()) "Sofia ligada ao sistema de chamadas ✓" else "A autorização não foi concedida"
+            updateSamsungCallAssistUi()
+            status.text = if (hasDialerRole()) "Modo Gateway direto ativo ✓" else "A Sofia não ficou como dialer predefinido"
         }
     }
 
@@ -404,7 +507,7 @@ class MainActivity : Activity() {
     private fun startGatewaySafely() {
         try {
             ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java))
-            status.text = "Sofia online · Gateway Build 42 ✓"
+            status.text = "Sofia online · Gateway Build 44 ✓"
         } catch (t: Throwable) {
             status.text = "Erro ao iniciar: ${t.message ?: "sem detalhe"}"
         }
@@ -412,6 +515,6 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startGatewaySafely()
+        if (requestCode == 100 && grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startGatewaySafely()
     }
 }
