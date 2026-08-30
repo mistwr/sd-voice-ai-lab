@@ -63,7 +63,7 @@ class MainActivity : Activity() {
 
         val hero = card()
         hero.addView(text("●  Sofia", 20f, true).apply { setTextColor(Color.rgb(117, 235, 180)) })
-        hero.addView(text("Samsung Gateway · Build 41", 13f).apply { setTextColor(Color.LTGRAY) })
+        hero.addView(text("Samsung Gateway · Build 42", 13f).apply { setTextColor(Color.LTGRAY) })
         roleState = text("A verificar controlo de chamadas…", 14f).apply { setPadding(0, dp(10), 0, dp(8)) }
         hero.addView(roleState)
         setupButton = button("✓  Ativar Sofia nas chamadas")
@@ -73,6 +73,8 @@ class MainActivity : Activity() {
         root.addView(Space(this).apply { minimumHeight = dp(14) })
         val aiCard = card()
         aiCard.addView(text("IA durante a chamada", 19f, true))
+        val brainButton = button("🧠  Testar Sofia · LLM + voz")
+        aiCard.addView(brainButton)
         val recordSwitch = Switch(this).apply {
             text = "Gravar chamada"
             setTextColor(Color.WHITE)
@@ -104,6 +106,7 @@ class MainActivity : Activity() {
         recordSwitch.setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("record_calls", v).apply() }
         transcribeSwitch.setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("transcribe_calls", v).apply() }
         uploadSwitch.setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("upload_recordings", v).apply() }
+        brainButton.setOnClickListener { startActivity(Intent(this, SofiaBrainActivity::class.java)) }
 
         root.addView(Space(this).apply { minimumHeight = dp(14) })
         val recordingCard = card()
@@ -167,7 +170,7 @@ class MainActivity : Activity() {
         }
         val save = button("Guardar e iniciar gateway")
         val settings = button("Abrir definições da aplicação")
-        val refresh = button("Ver diagnóstico Build 41 — recording/upload")
+        val refresh = button("Ver diagnóstico Build 42 — IA/recording/TX")
         diagnostics = text("Diagnóstico: ainda sem dados", 12f).apply {
             setTextIsSelectable(true)
             setPadding(0, dp(12), 0, 0)
@@ -330,7 +333,7 @@ class MainActivity : Activity() {
             "TELEPHONY_TX_CAPABILITY_HTTP_ERROR", "AUDIO_CAPABILITY_HTTP_ERROR"
         )
         val out = names.mapNotNull { n -> prefs.getString("diag_$n", null)?.let { "$n:\n$it" } }.joinToString("\n\n")
-        diagnostics.text = if (out.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM — BUILD 41 RECORDING / UPLOAD / TX\n\n$out"
+        diagnostics.text = if (out.isBlank()) "Diagnóstico: ainda sem dados" else "DIAGNÓSTICO GSM — BUILD 42 IA / RECORDING / TX\n\n$out"
     }
 
     private fun placeTestCall(raw: String) {
@@ -401,7 +404,7 @@ class MainActivity : Activity() {
     private fun startGatewaySafely() {
         try {
             ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java))
-            status.text = "Sofia online · Gateway Build 41 ✓"
+            status.text = "Sofia online · Gateway Build 42 ✓"
         } catch (t: Throwable) {
             status.text = "Erro ao iniciar: ${t.message ?: "sem detalhe"}"
         }
