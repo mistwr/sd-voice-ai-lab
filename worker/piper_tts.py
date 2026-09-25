@@ -177,7 +177,7 @@ class PiperChunkedStream(tts.ChunkedStream):
         # gives telephone speech a natural micro-pause instead of one long block.
         sentences = [
             s.strip()
-            for s in re.split(r"(?<=[.!?])\\s+", prepared)
+            for s in re.split(r"(?<=[.!?])\s+", prepared)
             if s.strip()
         ] or [prepared]
 
@@ -197,6 +197,6 @@ class PiperChunkedStream(tts.ChunkedStream):
             # making the conversation sluggish.
             if index < len(sentences) - 1:
                 silence_samples = int(self._piper.sample_rate * 0.11)
-                output_emitter.push(b"\\x00\\x00" * silence_samples)
+                output_emitter.push(b"\x00\x00" * silence_samples)
 
         output_emitter.flush()
