@@ -25,6 +25,17 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"\bGPT\b", "G P T", text, flags=re.IGNORECASE)
     text = re.sub(r"\bLLM\b", "L L M", text, flags=re.IGNORECASE)
     text = re.sub(r"\bWebRTC\b", "Web R T C", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bCRM\b", "C R M", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bAPI\b", "A P I", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bMEO\b", "méu", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bNOS\b", "nós", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bDIGI\b", "dígi", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bLUMIN\b", "Lúmin", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bSD Dialer\b", "ésse dê dáialer", text, flags=re.IGNORECASE)
+    # A little extra punctuation helps Piper separate ideas instead of swallowing
+    # words in long sales sentences.
+    text = re.sub(r"\s*;\s*", ". ", text)
+    text = re.sub(r"\s*:\s*", ", ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -35,10 +46,10 @@ class PiperTTS(tts.TTS):
         model_path: str,
         *,
         config_path: str | None = None,
-        length_scale: float = 1.02,
-        noise_scale: float = 0.52,
-        noise_w_scale: float = 0.62,
-        volume: float = 0.96,
+        length_scale: float = 1.07,
+        noise_scale: float = 0.40,
+        noise_w_scale: float = 0.46,
+        volume: float = 0.94,
     ) -> None:
         model = Path(model_path)
         if not model.exists():
