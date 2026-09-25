@@ -125,12 +125,10 @@ class LuminAgent(Agent):
         super().__init__(instructions=build_instructions())
 
     async def on_enter(self):
-        await self.session.generate_reply(
-            instructions=(
-                "Cumprimenta em português de Portugal. Diz que és o Lumin, "
-                "assistente virtual da LUMIN AI, e que esta conversa é por voz "
-                "em tempo real. Termina com uma única pergunta curta."
-            ),
+        # Fast deterministic greeting: skip the LLM for the first sentence so
+        # the visitor hears Lumin as soon as the audio room is ready.
+        await self.session.say(
+            "Olá! Sou o Lumin. Em que posso ajudar?",
             allow_interruptions=True,
         )
 
