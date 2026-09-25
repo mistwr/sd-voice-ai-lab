@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, TurnHandlingOptions, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
 
@@ -57,27 +57,9 @@ VOICE_PROFILES = {
 }
 
 
-def voice_for_profile(base_tts: PiperTTS, voice_id: str):
-    if voice_id == "live":
-        # Managed streaming TTS through LiveKit Inference. This is a genuinely
-        # different voice/model and avoids local CPU synthesis latency.
-        return inference.TTS(
-            model="fishaudio/s2.1-pro",
-            voice="b347db033a6549378b48d00acb0d06cd",
-            language="pt",
-            extra_kwargs={
-                "latency": "low",
-                "speed": 0.96,
-                "temperature": 0.42,
-                "top_p": 0.55,
-                "min_chunk_length": 20,
-                "chunk_length": 180,
-            },
-        )
-
+def voice_for_profile(base_tts: PiperTTS, voice_id: str) -> PiperTTS:
     settings = VOICE_PROFILES.get(voice_id, VOICE_PROFILES["natural"])
     return base_tts.with_profile(**settings)
-
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["lumin_tts"] = get_piper()
@@ -95,13 +77,13 @@ def _voice_id_from_profile(profile: dict[str, Any]) -> str:
     if direct:
         return direct
     tone = _clean(profile.get("tone"), 300)
-    match = re.match(r"^\[VOICE:(natural|clear|commercial|live)\]\s*", tone, flags=re.IGNORECASE)
+    match = re.match(r"^\[VOICE:(natural|clear|commercial)\]\s*", tone, flags=re.IGNORECASE)
     return match.group(1).lower() if match else "natural"
 
 
 def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     tone = _clean(profile.get("tone"), 300)
-    return re.sub(r"^\[VOICE:(?:natural|clear|commercial|live)\]\s*", "", tone, flags=re.IGNORECASE)
+    return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
 def build_instructions(profile: dict[str, Any] | None = None) -> str:
@@ -220,18 +202,43 @@ async def entrypoint(ctx: JobContext):
     logger.info("voice profile selected", extra={"voice_profile": voice_id})
 
     session = AgentSession(
-        vad=inference.VAD(),
+        # Local Silero VAD is kept open-source and tuned for telephone audio.
+        vad=inference.VAD(
+            min_speech_duration=0.08,
+            min_silence_duration=0.30,
+            prefix_padding_duration=0.30,
+            activation_threshold=0.45,
+        ),
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
-        preemptive_generation=True,
-        min_endpointing_delay=0.34,
-        max_endpointing_delay=0.90,
-        # Telephone lines contain clicks, breaths and background speech.
-        # Require a clearer interruption so Lumin does not stop mid-sentence.
-        min_interruption_duration=0.65,
-        min_interruption_words=2,
-        resume_false_interruption=True,
+        # VAD-only end-of-turn avoids the heavier semantic detector. Dynamic
+        # endpointing learns the caller's pause rhythm while staying responsive.
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            endpointing={
+                "mode": "dynamic",
+                "min_delay": 0.28,
+                "max_delay": 0.75,
+                "alpha": 0.65,
+            },
+            interruption={
+                "mode": "vad",
+                "min_duration": 0.55,
+                "min_words": 1,
+                "false_interruption_timeout": 0.8,
+                "resume_false_interruption": True,
+            },
+            # Start both generation and local Piper synthesis before final turn
+            # confirmation. With one-call workloads this trades spare CPU for
+            # noticeably lower conversational latency.
+            preemptive_generation={
+                "enabled": True,
+                "preemptive_tts": True,
+                "max_speech_duration": 8.0,
+                "max_retries": 2,
+            },
+        ),
     )
 
     @session.on("conversation_item_added")
