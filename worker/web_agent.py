@@ -57,7 +57,24 @@ VOICE_PROFILES = {
 }
 
 
-def voice_for_profile(base_tts: PiperTTS, voice_id: str) -> PiperTTS:
+def voice_for_profile(base_tts: PiperTTS, voice_id: str):
+    if voice_id == "live":
+        # Managed streaming TTS through LiveKit Inference. This is a genuinely
+        # different voice/model and avoids local CPU synthesis latency.
+        return inference.TTS(
+            model="fishaudio/s2.1-pro",
+            voice="b347db033a6549378b48d00acb0d06cd",
+            language="pt",
+            extra_kwargs={
+                "latency": "low",
+                "speed": 0.96,
+                "temperature": 0.42,
+                "top_p": 0.55,
+                "min_chunk_length": 20,
+                "chunk_length": 180,
+            },
+        )
+
     settings = VOICE_PROFILES.get(voice_id, VOICE_PROFILES["natural"])
     return base_tts.with_profile(**settings)
 
@@ -78,13 +95,13 @@ def _voice_id_from_profile(profile: dict[str, Any]) -> str:
     if direct:
         return direct
     tone = _clean(profile.get("tone"), 300)
-    match = re.match(r"^\[VOICE:(natural|clear|commercial)\]\s*", tone, flags=re.IGNORECASE)
+    match = re.match(r"^\[VOICE:(natural|clear|commercial|live)\]\s*", tone, flags=re.IGNORECASE)
     return match.group(1).lower() if match else "natural"
 
 
 def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     tone = _clean(profile.get("tone"), 300)
-    return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
+    return re.sub(r"^\[VOICE:(?:natural|clear|commercial|live)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
 def build_instructions(profile: dict[str, Any] | None = None) -> str:
@@ -101,6 +118,7 @@ REGRAS GERAIS
 - Em conversa normal, tenta não passar de cerca de vinte e cinco palavras antes de devolver a vez à pessoa.
 - Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
 - Se tiveres muita informação, divide-a por várias intervenções em vez de despejar tudo numa resposta.
+- Depois de a pessoa responder, quando soar natural usa uma confirmação muito curta como frase independente, por exemplo "Certo." ou "Percebo.". Depois continua a ideia principal. Não repitas sempre a mesma confirmação.
 - Deixa a pessoa terminar a ideia antes de responder.
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
 - Evita listas, markdown, símbolos e respostas longas.
@@ -207,8 +225,8 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
         preemptive_generation=True,
-        min_endpointing_delay=0.42,
-        max_endpointing_delay=1.05,
+        min_endpointing_delay=0.34,
+        max_endpointing_delay=0.90,
         # Telephone lines contain clicks, breaths and background speech.
         # Require a clearer interruption so Lumin does not stop mid-sentence.
         min_interruption_duration=0.65,
