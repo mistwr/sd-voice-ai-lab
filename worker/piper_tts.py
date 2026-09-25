@@ -145,6 +145,12 @@ class PiperChunkedStream(tts.ChunkedStream):
 
         prepared = _prepare_ptpt_text(self._input_text)
 
+        # Telephone/SIP playout can clip the first phoneme when speech begins
+        # immediately after a turn. A tiny pre-roll gives the jitter/playout
+        # buffer time to open before the first real word.
+        pre_roll_samples = int(self._piper.sample_rate * 0.14)
+        output_emitter.push(b"\x00\x00" * pre_roll_samples)
+
         # Synthesize sentence by sentence. This lowers time-to-first-audio and
         # gives telephone speech a natural micro-pause instead of one long block.
         sentences = [
