@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from dotenv import load_dotenv
@@ -72,6 +73,20 @@ def _clean(value: Any, limit: int = 1800) -> str:
     return str(value).strip()[:limit]
 
 
+def _voice_id_from_profile(profile: dict[str, Any]) -> str:
+    direct = _clean(profile.get("voice"), 40)
+    if direct:
+        return direct
+    tone = _clean(profile.get("tone"), 300)
+    match = re.match(r"^\[VOICE:(natural|clear|commercial)\]\s*", tone, flags=re.IGNORECASE)
+    return match.group(1).lower() if match else "natural"
+
+
+def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
+    tone = _clean(profile.get("tone"), 300)
+    return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
+
+
 def build_instructions(profile: dict[str, Any] | None = None) -> str:
     profile = profile or {}
 
@@ -116,7 +131,7 @@ qualificação de leads e ferramentas à medida.
         ("ABERTURA PRETENDIDA", _clean(profile.get("opening"), 800)),
         ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), 1800)),
         ("NOTAS DA EMPRESA", _clean(profile.get("notes"), 2200)),
-        ("TOM", _clean(profile.get("tone"), 300)),
+        ("TOM", _tone_without_voice_tag(profile)),
     ]
     context = "\n".join(f"{title}:\n{text}" for title, text in sections if text)
 
@@ -181,9 +196,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     base_tts = ctx.proc.userdata.get("lumin_tts") or get_piper()
-    voice_id = "natural"
-    if isinstance(profile, dict):
-        voice_id = _clean(profile.get("voice"), 40) or "natural"
+    voice_id = _voice_id_from_profile(profile) if isinstance(profile, dict) else "natural"
     tts_engine = voice_for_profile(base_tts, voice_id)
 
     logger.info("voice profile selected", extra={"voice_profile": voice_id})
