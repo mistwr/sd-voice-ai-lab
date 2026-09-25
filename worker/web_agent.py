@@ -13,7 +13,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobExecutorType, JobProcess, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
 from kokoro_ptpt_tts import KokoroPtPTTTS
@@ -182,6 +182,7 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             agent_name="lumin-web",
             prewarm_fnc=prewarm,
+            job_executor_type=JobExecutorType.THREAD,
             num_idle_processes=1,
             initialize_process_timeout=60.0,
             job_memory_warn_mb=1900,
