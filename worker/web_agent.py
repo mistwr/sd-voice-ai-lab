@@ -33,7 +33,13 @@ def get_piper() -> PiperTTS:
     if _PIPER is None:
         model_path = os.getenv("PIPER_MODEL", "/app/voices/lumin-ptpt.onnx")
         logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
-        _PIPER = PiperTTS(model_path, length_scale=0.93)
+        _PIPER = PiperTTS(
+            model_path,
+            length_scale=1.02,
+            noise_scale=0.52,
+            noise_w_scale=0.62,
+            volume=0.96,
+        )
         logger.info(
             "local Piper PT-PT voice ready",
             extra={
@@ -70,6 +76,8 @@ FORMA DE FALAR
 - Se fores interrompido, pára.
 - Evita listas, markdown, símbolos e respostas longas.
 - Usa palavras correntes em português de Portugal e evita construções brasileiras.
+- Para a voz soar clara, evita siglas desnecessárias, escreve números por extenso quando forem curtos e usa pontuação natural.
+- Não fales depressa: prefere frases curtas com pausas naturais.
 
 OBJETIVO
 - Conversar naturalmente e ajudar.
