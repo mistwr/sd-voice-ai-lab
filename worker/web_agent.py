@@ -34,10 +34,10 @@ def get_piper() -> PiperTTS:
         logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
         _PIPER = PiperTTS(
             model_path,
-            length_scale=1.07,
-            noise_scale=0.40,
-            noise_w_scale=0.46,
-            volume=0.94,
+            length_scale=1.08,
+            noise_scale=0.38,
+            noise_w_scale=0.43,
+            volume=1.00,
         )
         logger.info(
             "local Piper PT-PT voice ready",
@@ -51,9 +51,9 @@ def get_piper() -> PiperTTS:
 
 
 VOICE_PROFILES = {
-    "natural": dict(length_scale=1.07, noise_scale=0.40, noise_w_scale=0.46, volume=0.94),
-    "clear": dict(length_scale=1.12, noise_scale=0.32, noise_w_scale=0.38, volume=0.95),
-    "commercial": dict(length_scale=1.04, noise_scale=0.42, noise_w_scale=0.48, volume=0.96),
+    "natural": dict(length_scale=1.08, noise_scale=0.38, noise_w_scale=0.43, volume=1.00),
+    "clear": dict(length_scale=1.11, noise_scale=0.30, noise_w_scale=0.36, volume=1.01),
+    "commercial": dict(length_scale=1.07, noise_scale=0.40, noise_w_scale=0.45, volume=1.02),
 }
 
 
@@ -100,7 +100,8 @@ REGRAS GERAIS
 - Em conversa normal, tenta não passar de cerca de vinte e cinco palavras antes de devolver a vez à pessoa.
 - Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
 - Se tiveres muita informação, divide-a por várias intervenções em vez de despejar tudo numa resposta.
-- Depois de a pessoa responder, quando soar natural usa uma confirmação muito curta como frase independente, por exemplo "Certo." ou "Percebo.". Depois continua a ideia principal. Não repitas sempre a mesma confirmação.
+- Depois de a pessoa responder, quando soar natural usa uma confirmação muito curta como frase independente, por exemplo "Certo.", "Entendo.", "Faz sentido." ou "Percebo.". Varia e não comeces todas as respostas da mesma maneira.
+- Fala como numa conversa real: não recites o guião, não repitas a pergunta do cliente e evita frases demasiado perfeitas ou formais.
 - Deixa a pessoa terminar a ideia antes de responder.
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
 - Evita listas, markdown, símbolos e respostas longas.
@@ -135,7 +136,28 @@ qualificação de leads e ferramentas à medida.
     ]
     context = "\n".join(f"{title}:\n{text}" for title, text in sections if text)
 
-    return base + """
+    sales_mode = ""
+    profile_id = _clean(profile.get("id"), 80).lower()
+    company_name = _clean(profile.get("company"), 120).lower()
+    if profile_id == "lumin-comercial" or "lumin ai" in company_name:
+        sales_mode = """
+
+MODO COMERCIAL LUMIN AI
+O teu objetivo não é despejar funcionalidades; é descobrir uma necessidade real e ligar essa necessidade a uma solução LUMIN AI.
+
+Segue esta lógica de venda consultiva:
+1. GANHA PERMISSÃO: sê breve e cria curiosidade. Não faças um monólogo inicial.
+2. DESCOBRE: faz uma pergunta de cada vez sobre como a empresa recebe clientes, responde a leads, perde tempo, faz follow-up ou executa tarefas repetitivas.
+3. APROFUNDA: quando surgir um problema, pergunta pelo impacto prático. Exemplo: demora a responder, leads sem seguimento, demasiado trabalho manual, dificuldade em criar conteúdo ou atender fora de horas.
+4. LIGA O PROBLEMA À SOLUÇÃO: apresenta apenas a funcionalidade LUMIN que resolve o problema identificado. Fala primeiro do resultado para o cliente e só depois da tecnologia.
+5. CRIA VALOR SEM INVENTAR: usa benefícios concretos como responder mais depressa, automatizar tarefas, centralizar trabalho ou qualificar contactos, mas nunca prometas valores de poupança, faturação ou resultados que não estejam no contexto autorizado.
+6. TESTA INTERESSE: usa perguntas curtas como "Se conseguisse automatizar essa parte, faria sentido ver como funciona?" ou "Isso resolveria uma dor que tem hoje?"
+7. TRATA OBJEÇÕES: primeiro reconhece, depois faz uma pergunta para perceber a razão real, responde apenas ao ponto levantado e volta a testar interesse. Não discutas com o cliente.
+8. FECHA O PRÓXIMO PASSO: quando houver interesse, confirma de forma direta que a pessoa quer uma demonstração/proposta ou contacto humano. Não digas que transferiste ou agendaste se essa integração não existir.
+9. Mantém o controlo da conversa com perguntas, mas sem pressão enganosa, urgência falsa ou insistência após uma recusa clara.
+"""
+
+    return base + sales_mode + """
 
 CONTEXTO DESTA EMPRESA
 Usa apenas a informação abaixo como contexto comercial autorizado.
@@ -152,12 +174,12 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
 
     if opening:
         # Keep disclosure even when the user supplied their own opening.
-        return f"Olá. Sou o {agent_name}, assistente virtual de inteligência artificial. {opening}"
+        return f"Olá. Sou o {agent_name}, assistente virtual de IA. {opening}"
 
     who = f" da {company}" if company else ""
     name_part = f", {customer_name}" if customer_name else ""
     return (
-        f"Olá{name_part}. Sou o {agent_name}, assistente virtual de inteligência artificial{who}. "
+        f"Olá{name_part}. Sou o {agent_name}, assistente virtual de IA{who}. "
         "Posso falar consigo por um momento?"
     )
 
