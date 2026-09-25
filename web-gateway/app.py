@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -27,6 +28,9 @@ LUMIN_OUTBOUND_TRUNK_NAME = os.getenv(
 )
 LUMIN_CALLER_ID = os.getenv("LUMIN_CALLER_ID", "")
 LUMIN_AGENT_NAME = os.getenv("LUMIN_AGENT_NAME", "lumin-web")
+
+logger = logging.getLogger("lumin-voice-gateway")
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="LUMIN Voice Gateway")
 
@@ -98,6 +102,7 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
 
     try:
         state["status"] = "preparing"
+        logger.info("call %s preparing", call_id)
 
         async with api.LiveKitAPI() as lkapi:
             trunk = await _find_lumin_trunk(lkapi)
@@ -107,6 +112,7 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
 
             state["trunkId"] = trunk_id
             state["status"] = "ringing"
+            logger.info("call %s ringing via trunk %s", call_id, trunk_id)
 
             req_kwargs: dict[str, Any] = {
                 "sip_trunk_id": trunk_id,
@@ -130,6 +136,7 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
             )
 
             state["status"] = "answered"
+            logger.info("call %s answered", call_id)
             state["sipParticipantId"] = (
                 getattr(sip_participant, "participant_id", "")
                 or getattr(sip_participant, "participant_identity", "")
@@ -155,10 +162,12 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
 
             state["dispatchId"] = getattr(dispatch, "id", "")
             state["status"] = "connected"
+            logger.info("call %s connected", call_id)
 
     except Exception as exc:
         state["status"] = "failed"
         state["error"] = str(exc)[:500]
+        logger.exception("call %s failed: %s", call_id, exc)
 
 
 @app.get("/health")
@@ -280,8 +289,12 @@ async def test_call_once():
         "createdAt": time.time(),
         "oneShotTest": True,
     }
-    asyncio.create_task(_run_outbound_call(call_id, phone, name))
-    return {"ok": True, "callId": call_id, "status": "queued", "roomName": room_name}
+    try:
+        await asyncio.wait_for(_run_outbound_call(call_id, phone, name), timeout=75)
+    except asyncio.TimeoutError:
+        _CALLS[call_id]["status"] = "timeout"
+        _CALLS[call_id]["error"] = "debug call timed out"
+    return _CALLS[call_id]
 
 
 @app.get("/api/call/{call_id}")
