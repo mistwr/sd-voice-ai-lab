@@ -1,7 +1,9 @@
 """
 LUMIN Web Voice Agent
 WebRTC voice agent for luminai.pt, no telephone number required.
-Runs as a persistent LiveKit Agents worker.
+
+Voice output uses Piper locally with the Portuguese (Portugal) "tugão"
+voice. The browser audio path remains LiveKit/WebRTC.
 """
 from __future__ import annotations
 
@@ -12,11 +14,35 @@ import os
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, inference
 
+from piper_tts import PiperTTS
+
 load_dotenv(".env.local")
 load_dotenv()
 
 logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
+
+_PIPER: PiperTTS | None = None
+
+
+def get_piper() -> PiperTTS:
+    global _PIPER
+    if _PIPER is None:
+        model_path = os.getenv(
+            "PIPER_MODEL",
+            "/app/voices/pt_PT-tugão-medium.onnx",
+        )
+        logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
+        _PIPER = PiperTTS(model_path, length_scale=0.96)
+        logger.info(
+            "local Piper voice ready",
+            extra={
+                "provider": _PIPER.provider,
+                "model": _PIPER.model,
+                "sample_rate": _PIPER.sample_rate,
+            },
+        )
+    return _PIPER
 
 
 def build_instructions() -> str:
@@ -36,6 +62,8 @@ FORMA DE FALAR
 - Ouve mais do que falas.
 - Se fores interrompido, pára e responde ao que a pessoa acabou de dizer.
 - Evita listas longas e linguagem técnica desnecessária.
+- Escreve as respostas de forma fácil de pronunciar em voz alta.
+- Evita símbolos, markdown e abreviaturas estranhas quando estiveres a falar.
 
 OBJETIVO
 - Demonstrar uma conversa de voz natural em tempo real.
@@ -87,13 +115,11 @@ async def entrypoint(ctx: JobContext):
         extra={"room": ctx.room.name, "source": metadata.get("source", "unknown")},
     )
 
-    voice_id = os.getenv("LUMIN_VOICE_ID") or os.getenv("SOFIA_VOICE_ID", "")
-
     session = AgentSession(
         vad=inference.VAD(),
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("cartesia/sonic-3", voice=voice_id),
+        tts=get_piper(),
     )
 
     await session.start(agent=LuminAgent(), room=ctx.room)
