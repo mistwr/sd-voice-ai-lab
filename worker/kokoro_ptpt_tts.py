@@ -24,11 +24,27 @@ _SYNTH_LOCK = threading.Lock()
 class KokoroPtPTTTS(tts.TTS):
     def __init__(self) -> None:
         self._engine = EuPtEngine()
+        self._pcm_cache: dict[str, bytes] = {}
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=24000,
             num_channels=1,
         )
+
+    def _synthesize_pcm_sync(self, text: str) -> bytes:
+        with _SYNTH_LOCK:
+            wav = self._engine.say(text)
+        audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+        audio = np.clip(audio, -1.0, 1.0)
+        return (audio * 32767.0).astype(np.int16).tobytes()
+
+    def precache(self, text: str) -> None:
+        """Pre-synthesise fixed prompts so playback can start immediately."""
+        if text not in self._pcm_cache:
+            self._pcm_cache[text] = self._synthesize_pcm_sync(text)
+
+    def cached_pcm(self, text: str) -> bytes | None:
+        return self._pcm_cache.get(text)
 
     @property
     def model(self) -> str:
@@ -78,15 +94,12 @@ class KokoroChunkedStream(tts.ChunkedStream):
             stream=False,
         )
 
-        def _synth():
-            with _SYNTH_LOCK:
-                return self._kokoro._engine.say(self._input_text)
-
-        wav = await asyncio.to_thread(_synth)
-
-        audio = np.asarray(wav, dtype=np.float32).reshape(-1)
-        audio = np.clip(audio, -1.0, 1.0)
-        pcm16 = (audio * 32767.0).astype(np.int16).tobytes()
+        pcm16 = self._kokoro.cached_pcm(self._input_text)
+        if pcm16 is None:
+            pcm16 = await asyncio.to_thread(
+                self._kokoro._synthesize_pcm_sync,
+                self._input_text,
+            )
 
         output_emitter.push(pcm16)
         output_emitter.flush()
