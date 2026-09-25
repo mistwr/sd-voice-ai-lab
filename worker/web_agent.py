@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
+from kokoro_ptpt_tts import KokoroPtPTTTS
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -24,6 +25,7 @@ logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
 
 _PIPER: PiperTTS | None = None
+_KOKORO: KokoroPtPTTTS | None = None
 
 
 def get_piper() -> PiperTTS:
@@ -44,6 +46,22 @@ def get_piper() -> PiperTTS:
             },
         )
     return _PIPER
+
+
+def get_kokoro() -> KokoroPtPTTTS:
+    global _KOKORO
+    if _KOKORO is None:
+        logger.info("loading Kokoro European-Portuguese voice")
+        _KOKORO = KokoroPtPTTTS()
+        logger.info(
+            "Kokoro PT-PT voice ready",
+            extra={
+                "provider": _KOKORO.provider,
+                "model": _KOKORO.model,
+                "sample_rate": _KOKORO.sample_rate,
+            },
+        )
+    return _KOKORO
 
 
 def build_instructions() -> str:
@@ -118,8 +136,13 @@ async def entrypoint(ctx: JobContext):
         extra={"room": ctx.room.name, "source": metadata.get("source", "unknown")},
     )
 
-    # Load the local ONNX voice off the realtime event loop.
-    tts_engine = await asyncio.to_thread(get_piper)
+    # Prefer the dedicated European-Portuguese Kokoro model. Keep Piper only
+    # as a safety fallback if Kokoro cannot initialize.
+    try:
+        tts_engine = await asyncio.to_thread(get_kokoro)
+    except Exception:
+        logger.exception("Kokoro PT-PT failed; falling back to Piper PT-PT")
+        tts_engine = await asyncio.to_thread(get_piper)
 
     session = AgentSession(
         vad=inference.VAD(),
