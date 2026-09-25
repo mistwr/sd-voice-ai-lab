@@ -13,7 +13,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
 from kokoro_ptpt_tts import KokoroPtPTTTS
@@ -62,6 +62,17 @@ def get_kokoro() -> KokoroPtPTTTS:
             },
         )
     return _KOKORO
+
+
+def prewarm(proc: JobProcess) -> None:
+    """Load the heavy PT-PT voice before a visitor starts a call."""
+    logger.info("prewarming Kokoro PT-PT voice")
+    try:
+        proc.userdata["lumin_tts"] = get_kokoro()
+        logger.info("Kokoro PT-PT prewarm complete")
+    except Exception:
+        logger.exception("Kokoro prewarm failed; prewarming Piper fallback")
+        proc.userdata["lumin_tts"] = get_piper()
 
 
 def build_instructions() -> str:
@@ -136,13 +147,15 @@ async def entrypoint(ctx: JobContext):
         extra={"room": ctx.room.name, "source": metadata.get("source", "unknown")},
     )
 
-    # Prefer the dedicated European-Portuguese Kokoro model. Keep Piper only
-    # as a safety fallback if Kokoro cannot initialize.
-    try:
-        tts_engine = await asyncio.to_thread(get_kokoro)
-    except Exception:
-        logger.exception("Kokoro PT-PT failed; falling back to Piper PT-PT")
-        tts_engine = await asyncio.to_thread(get_piper)
+    # The voice is preloaded in the idle job process so answering a call does
+    # not spend 10–20 seconds loading a 300+ MB model.
+    tts_engine = ctx.proc.userdata.get("lumin_tts")
+    if tts_engine is None:
+        try:
+            tts_engine = await asyncio.to_thread(get_kokoro)
+        except Exception:
+            logger.exception("Kokoro PT-PT failed; falling back to Piper PT-PT")
+            tts_engine = await asyncio.to_thread(get_piper)
 
     session = AgentSession(
         vad=inference.VAD(),
@@ -166,4 +179,13 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="lumin-web"))
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            agent_name="lumin-web",
+            prewarm_fnc=prewarm,
+            num_idle_processes=1,
+            initialize_process_timeout=60.0,
+            job_memory_warn_mb=1900,
+        )
+    )
