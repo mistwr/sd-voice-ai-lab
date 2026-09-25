@@ -1,0 +1,22 @@
+# LUMIN Web Voice Agent — dedicated image
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIPER_MODEL=/app/voices/pt_PT-tugão-medium.onnx
+
+COPY requirements-web.txt .
+RUN pip install --no-cache-dir -r requirements-web.txt
+
+# Portuguese (Portugal) open-source voice, 22.05 kHz, local ONNX inference.
+RUN mkdir -p /app/voices \
+    && python -m piper.download_voices "pt_PT-tugão-medium" --download-dir /app/voices
+
+COPY web_agent.py piper_tts.py ./
+
+# Best-effort prewarm/download for any LiveKit local helper assets.
+RUN python web_agent.py download-files || true
+
+CMD ["python", "web_agent.py", "start"]
