@@ -72,7 +72,7 @@ REGRAS GERAIS
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Usa respostas curtas, normalmente uma ou duas frases, e faz uma pergunta de cada vez.
 - Faz pausas naturais entre ideias. Prefere frases curtas com vírgulas e pontos, em vez de uma frase longa.
-- Não dispares a resposta ao primeiro silêncio curto: deixa a pessoa terminar a ideia.
+- Deixa a pessoa terminar a ideia antes de responder.
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
 - Evita listas, markdown, símbolos e respostas longas.
 - Evita construções brasileiras e fala com ritmo calmo e dicção clara.
@@ -171,15 +171,9 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
-        # Semantic turn detection makes pauses feel natural: it can answer quickly
-        # when the sentence is complete, but waits through mid-thought pauses.
-        turn_detection=inference.TurnDetector(),
         preemptive_generation=True,
-        min_endpointing_delay=0.45,
-        max_endpointing_delay=1.35,
-        min_interruption_duration=0.4,
-        min_interruption_words=1,
-        resume_false_interruption=True,
+        min_endpointing_delay=0.35,
+        max_endpointing_delay=0.95,
     )
 
     @session.on("conversation_item_added")
