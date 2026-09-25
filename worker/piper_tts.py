@@ -145,36 +145,55 @@ class PiperChunkedStream(tts.ChunkedStream):
 
         prepared = _prepare_ptpt_text(self._input_text)
 
-        # Telephone/SIP playout can clip the first phoneme when speech begins
-        # immediately after a turn. A tiny pre-roll gives the jitter/playout
-        # buffer time to open before the first real word.
-        pre_roll_samples = int(self._piper.sample_rate * 0.14)
+        # SIP/telephone playout can shave the first consonant when audio starts
+        # exactly at a turn boundary. Keep a tiny buffer-opening pre-roll.
+        pre_roll_samples = int(self._piper.sample_rate * 0.10)
         output_emitter.push(b"\x00\x00" * pre_roll_samples)
 
-        # Synthesize sentence by sentence. This lowers time-to-first-audio and
-        # gives telephone speech a natural micro-pause instead of one long block.
         sentences = [
             s.strip()
-            for s in re.split(r"(?<=[.!?])\\s+", prepared)
+            for s in re.split(r"(?<=[.!?])\s+", prepared)
             if s.strip()
         ] or [prepared]
 
-        for index, sentence in enumerate(sentences):
-            chunks = await asyncio.to_thread(
-                lambda s=sentence: list(
-                    self._piper._voice.synthesize(
-                        s,
+        # Do not collect the whole sentence before playback. Produce Piper audio
+        # in a worker thread and forward each chunk immediately to LiveKit.
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue()
+        done = object()
+
+        def produce() -> None:
+            try:
+                for index, sentence in enumerate(sentences):
+                    for chunk in self._piper._voice.synthesize(
+                        sentence,
                         syn_config=self._piper._syn_config,
-                    )
-                )
-            )
-            for chunk in chunks:
-                output_emitter.push(chunk.audio_int16_bytes)
+                    ):
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            chunk.audio_int16_bytes,
+                        )
 
-            # About 110 ms between complete ideas: enough to sound human without
-            # making the conversation sluggish.
-            if index < len(sentences) - 1:
-                silence_samples = int(self._piper.sample_rate * 0.11)
-                output_emitter.push(b"\\x00\\x00" * silence_samples)
+                    if index < len(sentences) - 1:
+                        silence_samples = int(self._piper.sample_rate * 0.08)
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            b"\x00\x00" * silence_samples,
+                        )
+            except BaseException as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, done)
 
+        producer = asyncio.create_task(asyncio.to_thread(produce))
+
+        while True:
+            item = await queue.get()
+            if item is done:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            output_emitter.push(item)
+
+        await producer
         output_emitter.flush()
