@@ -5,14 +5,16 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIPER_MODEL=/app/voices/pt_PT-tugão-medium.onnx
+    PIPER_MODEL=/app/voices/lumin-ptpt.onnx
 
 COPY requirements-web.txt .
 RUN pip install --no-cache-dir -r requirements-web.txt
 
-# Portuguese (Portugal) open-source voice, 22.05 kHz, local ONNX inference.
+# Portuguese (Portugal) open-source Piper voice "tugão".
+# Use percent-encoded Hugging Face URLs because urllib's voice downloader
+# currently chokes on the non-ASCII voice name in the request path.
 RUN mkdir -p /app/voices \
-    && python -m piper.download_voices "pt_PT-tugão-medium" --download-dir /app/voices
+    && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx?download=true','/app/voices/lumin-ptpt.onnx'); urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json?download=true','/app/voices/lumin-ptpt.onnx.json')"
 
 COPY web_agent.py piper_tts.py ./
 
