@@ -45,6 +45,7 @@ app.add_middleware(
 
 _CALLS: dict[str, dict[str, Any]] = {}
 _LAST_CALL_AT = 0.0
+_TEST_CALL_USED = False
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 
@@ -257,6 +258,30 @@ async def start_outbound_call(
         "status": "queued",
         "roomName": room_name,
     }
+
+
+@app.post("/api/test-call-once")
+async def test_call_once():
+    global _TEST_CALL_USED
+    if _TEST_CALL_USED:
+        raise HTTPException(status_code=410, detail="Test call already used")
+    _TEST_CALL_USED = True
+
+    call_id = uuid.uuid4().hex[:12]
+    room_name = f"lumin-call-{call_id}"
+    phone = "+351923343490"
+    name = "Teste Lumin"
+    _CALLS[call_id] = {
+        "callId": call_id,
+        "status": "queued",
+        "phone": phone,
+        "name": name,
+        "roomName": room_name,
+        "createdAt": time.time(),
+        "oneShotTest": True,
+    }
+    asyncio.create_task(_run_outbound_call(call_id, phone, name))
+    return {"ok": True, "callId": call_id, "status": "queued", "roomName": room_name}
 
 
 @app.get("/api/call/{call_id}")
