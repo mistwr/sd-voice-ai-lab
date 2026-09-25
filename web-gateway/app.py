@@ -30,10 +30,6 @@ LUMIN_OUTBOUND_TRUNK_NAME = os.getenv(
 )
 LUMIN_CALLER_ID = os.getenv("LUMIN_CALLER_ID", "")
 LUMIN_AGENT_NAME = os.getenv("LUMIN_AGENT_NAME", "lumin-web")
-LUMIN_QWEN_AGENT_NAME = os.getenv("LUMIN_QWEN_AGENT_NAME", "lumin-qwen")
-QWEN_REALTIME_ENABLED = os.getenv("QWEN_REALTIME_ENABLED", "").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 
 LUMIN_PLATFORM_PASSWORD_HASH = os.getenv("LUMIN_PLATFORM_PASSWORD_HASH", "")
 LUMIN_PLATFORM_SESSION_SECRET = os.getenv("LUMIN_PLATFORM_SESSION_SECRET", "")
@@ -242,15 +238,9 @@ async def _run_outbound_call(
                 "source": "lumin-call-api",
             }
 
-            tone = ""
-            if isinstance(agent_profile, dict):
-                tone = str(agent_profile.get("tone") or "")
-            wants_qwen = tone.startswith("[VOICE:qwen-")
-            dispatch_agent_name = LUMIN_QWEN_AGENT_NAME if wants_qwen else LUMIN_AGENT_NAME
-
             dispatch = await lkapi.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(
-                    agent_name=dispatch_agent_name,
+                    agent_name=LUMIN_AGENT_NAME,
                     room=room_name,
                     metadata=json.dumps(dispatch_metadata),
                 )
@@ -298,7 +288,6 @@ async def health():
         "platformConfigured": bool(
             LUMIN_PLATFORM_PASSWORD_HASH and LUMIN_PLATFORM_SESSION_SECRET
         ),
-        "qwenRealtimeConfigured": QWEN_REALTIME_ENABLED,
     }
 
 
@@ -387,36 +376,12 @@ async def platform_call(
     _require_platform_session(authorization)
     phone = _normalise_phone(payload.phone)
     profile = payload.agent.model_dump()
-    if str(profile.get("tone") or "").startswith("[VOICE:qwen-") and not QWEN_REALTIME_ENABLED:
-        raise HTTPException(
-            status_code=503,
-            detail="Qwen Realtime Open ainda aguarda ligação ao endpoint GPU",
-        )
     state = _queue_call(phone, payload.name, profile)
     return {
         "ok": True,
         "callId": state["callId"],
         "status": state["status"],
         "roomName": state["roomName"],
-    }
-
-
-@app.get("/api/platform/capabilities")
-async def platform_capabilities(
-    authorization: str | None = Header(default=None, alias="Authorization"),
-):
-    _require_platform_session(authorization)
-    return {
-        "ok": True,
-        "qwenRealtime": {
-            "available": QWEN_REALTIME_ENABLED,
-            "agentName": LUMIN_QWEN_AGENT_NAME,
-            "voices": [
-                {"id": "qwen-ethan", "name": "Ethan", "gender": "male"},
-                {"id": "qwen-chelsie", "name": "Chelsie", "gender": "female"},
-                {"id": "qwen-aiden", "name": "Aiden", "gender": "male"},
-            ],
-        },
     }
 
 
