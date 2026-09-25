@@ -10,12 +10,15 @@ Uses logus2k/kokoro_tts_eu_pt via the tts_eu_pt package:
 from __future__ import annotations
 
 import asyncio
+import threading
 import numpy as np
 
 from livekit.agents import tts
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
 from tts_eu_pt import TTS as EuPtEngine
+
+_SYNTH_LOCK = threading.Lock()
 
 
 class KokoroPtPTTTS(tts.TTS):
@@ -75,7 +78,11 @@ class KokoroChunkedStream(tts.ChunkedStream):
             stream=False,
         )
 
-        wav = await asyncio.to_thread(self._kokoro._engine.say, self._input_text)
+        def _synth():
+            with _SYNTH_LOCK:
+                return self._kokoro._engine.say(self._input_text)
+
+        wav = await asyncio.to_thread(_synth)
 
         audio = np.asarray(wav, dtype=np.float32).reshape(-1)
         audio = np.clip(audio, -1.0, 1.0)
