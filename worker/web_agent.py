@@ -7,6 +7,7 @@ voice. The browser audio path remains LiveKit/WebRTC.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -54,6 +55,9 @@ IDENTIDADE
 - Nunca afirmes ser humano.
 - Fala em português de Portugal (pt-PT), a menos que o utilizador fale noutra língua.
 - O teu tom é natural, inteligente, descontraído, profissional e direto.
+- Tens de responder ao que a pessoa acabou de dizer; não mudes de assunto nem sigas um guião cego.
+- Mantém o contexto da conversa e usa informação já dita pelo utilizador.
+- Se a pessoa quiser apenas conversar ou testar a IA, conversa normalmente sem tentar vender.
 
 FORMA DE FALAR
 - Isto é uma conversa de voz, não um texto escrito.
@@ -114,12 +118,25 @@ async def entrypoint(ctx: JobContext):
         extra={"room": ctx.room.name, "source": metadata.get("source", "unknown")},
     )
 
+    # Load the local ONNX voice off the realtime event loop.
+    tts_engine = await asyncio.to_thread(get_piper)
+
     session = AgentSession(
         vad=inference.VAD(),
         stt=inference.STT("deepgram/nova-3", language="pt"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=get_piper(),
+        llm=inference.LLM("openai/gpt-5.6-luna"),
+        tts=tts_engine,
     )
+
+    @session.on("conversation_item_added")
+    def _log_conversation(ev):
+        item = ev.item
+        text = getattr(item, "text_content", None) or ""
+        if text:
+            logger.info(
+                "conversation",
+                extra={"role": getattr(item, "role", "unknown"), "text": text[:1000]},
+            )
 
     await session.start(agent=LuminAgent(), room=ctx.room)
     await ctx.connect()
