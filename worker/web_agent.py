@@ -49,6 +49,18 @@ def get_piper() -> PiperTTS:
     return _PIPER
 
 
+VOICE_PROFILES = {
+    "natural": dict(length_scale=1.07, noise_scale=0.40, noise_w_scale=0.46, volume=0.94),
+    "clear": dict(length_scale=1.12, noise_scale=0.32, noise_w_scale=0.38, volume=0.95),
+    "commercial": dict(length_scale=1.04, noise_scale=0.42, noise_w_scale=0.48, volume=0.96),
+}
+
+
+def voice_for_profile(base_tts: PiperTTS, voice_id: str) -> PiperTTS:
+    settings = VOICE_PROFILES.get(voice_id, VOICE_PROFILES["natural"])
+    return base_tts.with_profile(**settings)
+
+
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["lumin_tts"] = get_piper()
     logger.info("Piper PT-PT prewarm complete")
@@ -71,7 +83,9 @@ REGRAS GERAIS
 - Fala em português de Portugal, de forma natural, clara e profissional.
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Usa respostas curtas, normalmente uma ou duas frases, e faz uma pergunta de cada vez.
-- Faz pausas naturais entre ideias. Prefere frases curtas com vírgulas e pontos, em vez de uma frase longa.
+- Em conversa normal, tenta não passar de cerca de vinte e cinco palavras antes de devolver a vez à pessoa.
+- Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
+- Se tiveres muita informação, divide-a por várias intervenções em vez de despejar tudo numa resposta.
 - Deixa a pessoa terminar a ideia antes de responder.
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
 - Evita listas, markdown, símbolos e respostas longas.
@@ -166,7 +180,13 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
-    tts_engine = ctx.proc.userdata.get("lumin_tts") or get_piper()
+    base_tts = ctx.proc.userdata.get("lumin_tts") or get_piper()
+    voice_id = "natural"
+    if isinstance(profile, dict):
+        voice_id = _clean(profile.get("voice"), 40) or "natural"
+    tts_engine = voice_for_profile(base_tts, voice_id)
+
+    logger.info("voice profile selected", extra={"voice_profile": voice_id})
 
     session = AgentSession(
         vad=inference.VAD(),
@@ -174,8 +194,13 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
         preemptive_generation=True,
-        min_endpointing_delay=0.35,
-        max_endpointing_delay=0.95,
+        min_endpointing_delay=0.42,
+        max_endpointing_delay=1.05,
+        # Telephone lines contain clicks, breaths and background speech.
+        # Require a clearer interruption so Lumin does not stop mid-sentence.
+        min_interruption_duration=0.65,
+        min_interruption_words=2,
+        resume_false_interruption=True,
     )
 
     @session.on("conversation_item_added")
