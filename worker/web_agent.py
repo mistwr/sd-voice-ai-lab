@@ -1,22 +1,23 @@
 """
 LUMIN Web Voice Agent
-WebRTC voice agent for luminai.pt, no telephone number required.
+Stable production voice path for luminai.pt.
 
-Voice output uses Piper locally with the Portuguese (Portugal) "tugão"
-voice. The browser audio path remains LiveKit/WebRTC.
+Pipeline:
+WebRTC -> Deepgram STT -> GPT-5.6 Luna -> Piper PT-PT -> WebRTC
+
+Kokoro is intentionally disabled in production for now because CPU synthesis on
+this Railway instance introduced long warm-up times and job-runner timeouts.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobExecutorType, JobProcess, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
-from kokoro_ptpt_tts import KokoroPtPTTTS
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -25,21 +26,16 @@ logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
 
 _PIPER: PiperTTS | None = None
-_KOKORO: KokoroPtPTTTS | None = None
-GREETING = "Olá! Sou o Lumin. Em que posso ajudar?"
 
 
 def get_piper() -> PiperTTS:
     global _PIPER
     if _PIPER is None:
-        model_path = os.getenv(
-            "PIPER_MODEL",
-            "/app/voices/pt_PT-tugão-medium.onnx",
-        )
+        model_path = os.getenv("PIPER_MODEL", "/app/voices/lumin-ptpt.onnx")
         logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
-        _PIPER = PiperTTS(model_path, length_scale=0.96)
+        _PIPER = PiperTTS(model_path, length_scale=0.93)
         logger.info(
-            "local Piper voice ready",
+            "local Piper PT-PT voice ready",
             extra={
                 "provider": _PIPER.provider,
                 "model": _PIPER.model,
@@ -49,33 +45,9 @@ def get_piper() -> PiperTTS:
     return _PIPER
 
 
-def get_kokoro() -> KokoroPtPTTTS:
-    global _KOKORO
-    if _KOKORO is None:
-        logger.info("loading Kokoro European-Portuguese voice")
-        _KOKORO = KokoroPtPTTTS()
-        logger.info(
-            "Kokoro PT-PT voice ready",
-            extra={
-                "provider": _KOKORO.provider,
-                "model": _KOKORO.model,
-                "sample_rate": _KOKORO.sample_rate,
-            },
-        )
-    return _KOKORO
-
-
 def prewarm(proc: JobProcess) -> None:
-    """Load the heavy PT-PT voice before a visitor starts a call."""
-    logger.info("prewarming Kokoro PT-PT voice")
-    try:
-        voice = get_kokoro()
-        voice.precache(GREETING)
-        proc.userdata["lumin_tts"] = voice
-        logger.info("Kokoro PT-PT prewarm complete, greeting cached")
-    except Exception:
-        logger.exception("Kokoro prewarm failed; prewarming Piper fallback")
-        proc.userdata["lumin_tts"] = get_piper()
+    proc.userdata["lumin_tts"] = get_piper()
+    logger.info("Piper PT-PT prewarm complete")
 
 
 def build_instructions() -> str:
@@ -85,42 +57,35 @@ Tu és o Lumin, o assistente virtual de voz da LUMIN AI.
 IDENTIDADE
 - Apresenta-te claramente como assistente virtual de inteligência artificial da LUMIN AI.
 - Nunca afirmes ser humano.
-- Fala em português de Portugal (pt-PT), a menos que o utilizador fale noutra língua.
-- O teu tom é natural, inteligente, descontraído, profissional e direto.
-- Tens de responder ao que a pessoa acabou de dizer; não mudes de assunto nem sigas um guião cego.
-- Mantém o contexto da conversa e usa informação já dita pelo utilizador.
-- Se a pessoa quiser apenas conversar ou testar a IA, conversa normalmente sem tentar vender.
+- Fala em português de Portugal, de forma natural.
+- O teu tom é inteligente, descontraído, profissional e direto.
+- Responde exatamente ao que a pessoa acabou de dizer e mantém o contexto.
+- Se a pessoa estiver apenas a testar ou conversar, conversa normalmente e não forces uma venda.
 
 FORMA DE FALAR
-- Isto é uma conversa de voz, não um texto escrito.
-- Usa frases curtas e naturais.
-- Numa conversa normal, responde primeiro em uma ou duas frases curtas; desenvolve apenas se te pedirem.
+- Isto é uma chamada de voz, não um texto escrito.
+- Usa respostas curtas, normalmente uma ou duas frases.
 - Faz uma pergunta de cada vez.
 - Ouve mais do que falas.
-- Se fores interrompido, pára e responde ao que a pessoa acabou de dizer.
-- Evita listas longas e linguagem técnica desnecessária.
-- Escreve as respostas de forma fácil de pronunciar em voz alta.
-- Evita símbolos, markdown e abreviaturas estranhas quando estiveres a falar.
+- Se fores interrompido, pára.
+- Evita listas, markdown, símbolos e respostas longas.
+- Usa palavras correntes em português de Portugal e evita construções brasileiras.
 
 OBJETIVO
-- Demonstrar uma conversa de voz natural em tempo real.
+- Conversar naturalmente e ajudar.
 - Explicar o que é a LUMIN AI quando perguntarem.
 - Perceber o que a pessoa pretende.
-- Se for uma empresa, perceber onde perde tempo, como recebe contactos e que tarefas repete.
-- Sugerir no máximo uma ou duas aplicações concretas de IA que façam sentido.
+- Para empresas, identificar tarefas repetitivas e sugerir aplicações concretas de IA quando fizer sentido.
 
 SOBRE A LUMIN AI
 A LUMIN AI é uma plataforma portuguesa de inteligência artificial e automação para pessoas e empresas.
-Pode apoiar criação de websites e aplicações, agentes de IA, atendimento, apoio comercial,
-automação, marketing, conteúdos, gestão e qualificação de leads e ferramentas à medida.
-Não inventes preços, clientes, resultados ou funcionalidades que não conheças.
+Pode apoiar websites, aplicações, agentes de IA, atendimento, apoio comercial, automação,
+marketing, conteúdos, gestão e qualificação de leads e ferramentas à medida.
 
 TRANSPARÊNCIA
-Se não souberes uma resposta, diz de forma natural que não queres inventar e que a equipa pode confirmar.
-Nunca peças passwords, códigos bancários, dados de cartões ou outras credenciais.
-
-INÍCIO
-Cumprimenta, apresenta-te e pergunta em que podes ajudar.
+- Não inventes preços, clientes, resultados ou funcionalidades.
+- Se não souberes, diz que não queres inventar e que a equipa pode confirmar.
+- Nunca peças passwords, códigos bancários, dados de cartões ou outras credenciais.
 """.strip()
 
 
@@ -128,6 +93,11 @@ class LuminAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=build_instructions())
 
+    async def on_enter(self):
+        await self.session.say(
+            "Olá! Sou o Lumin. Em que posso ajudar?",
+            allow_interruptions=True,
+        )
 
 
 async def entrypoint(ctx: JobContext):
@@ -142,15 +112,7 @@ async def entrypoint(ctx: JobContext):
         extra={"room": ctx.room.name, "source": metadata.get("source", "unknown")},
     )
 
-    # The voice is preloaded in the idle job process so answering a call does
-    # not spend 10–20 seconds loading a 300+ MB model.
-    tts_engine = ctx.proc.userdata.get("lumin_tts")
-    if tts_engine is None:
-        try:
-            tts_engine = await asyncio.to_thread(get_kokoro)
-        except Exception:
-            logger.exception("Kokoro PT-PT failed; falling back to Piper PT-PT")
-            tts_engine = await asyncio.to_thread(get_piper)
+    tts_engine = ctx.proc.userdata.get("lumin_tts") or get_piper()
 
     session = AgentSession(
         vad=inference.VAD(),
@@ -165,19 +127,18 @@ async def entrypoint(ctx: JobContext):
     @session.on("conversation_item_added")
     def _log_conversation(ev):
         item = ev.item
-        text = getattr(item, "text_content", None) or ""
-        if text:
+        text_value = getattr(item, "text_content", None) or ""
+        if text_value:
             logger.info(
                 "conversation",
-                extra={"role": getattr(item, "role", "unknown"), "text": text[:1000]},
+                extra={
+                    "role": getattr(item, "role", "unknown"),
+                    "text": text_value[:1000],
+                },
             )
 
     await session.start(agent=LuminAgent(), room=ctx.room)
     await ctx.connect()
-
-    # Speak only after the WebRTC room is connected. The exact PCM for this
-    # greeting is pre-generated during worker warm-up, so there is no TTS wait.
-    await session.say(GREETING, allow_interruptions=False)
 
 
 if __name__ == "__main__":
@@ -186,9 +147,8 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             agent_name="lumin-web",
             prewarm_fnc=prewarm,
-            job_executor_type=JobExecutorType.THREAD,
             num_idle_processes=1,
-            initialize_process_timeout=60.0,
-            job_memory_warn_mb=1900,
+            initialize_process_timeout=30.0,
+            job_memory_warn_mb=900,
         )
     )
