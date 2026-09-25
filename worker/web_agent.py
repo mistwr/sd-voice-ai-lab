@@ -33,10 +33,10 @@ def get_piper() -> PiperTTS:
         logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
         _PIPER = PiperTTS(
             model_path,
-            length_scale=1.02,
-            noise_scale=0.52,
-            noise_w_scale=0.62,
-            volume=0.96,
+            length_scale=1.07,
+            noise_scale=0.40,
+            noise_w_scale=0.46,
+            volume=0.94,
         )
         logger.info(
             "local Piper PT-PT voice ready",
@@ -76,6 +76,8 @@ REGRAS GERAIS
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
 - Evita listas, markdown, símbolos e respostas longas.
 - Evita construções brasileiras e fala com ritmo calmo e dicção clara.
+- Em chamada telefónica, articula bem cada palavra e evita emendar o fim de uma palavra no início da seguinte.
+- Quando disseres marcas, siglas, preços ou condições, abranda ligeiramente e faz uma pausa curta antes e depois.
 - Não inventes preços, resultados, condições, clientes ou funcionalidades.
 - Se não souberes, diz de forma natural que não queres inventar.
 - Nunca peças passwords, códigos bancários, PINs, dados completos de cartões ou credenciais.
