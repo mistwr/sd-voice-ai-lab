@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, TurnHandlingOptions, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
 
@@ -202,43 +202,18 @@ async def entrypoint(ctx: JobContext):
     logger.info("voice profile selected", extra={"voice_profile": voice_id})
 
     session = AgentSession(
-        # Local Silero VAD is kept open-source and tuned for telephone audio.
-        vad=inference.VAD(
-            min_speech_duration=0.08,
-            min_silence_duration=0.30,
-            prefix_padding_duration=0.30,
-            activation_threshold=0.45,
-        ),
+        vad=inference.VAD(),
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
-        # VAD-only end-of-turn avoids the heavier semantic detector. Dynamic
-        # endpointing learns the caller's pause rhythm while staying responsive.
-        turn_handling=TurnHandlingOptions(
-            turn_detection="vad",
-            endpointing={
-                "mode": "dynamic",
-                "min_delay": 0.28,
-                "max_delay": 0.75,
-                "alpha": 0.65,
-            },
-            interruption={
-                "mode": "vad",
-                "min_duration": 0.55,
-                "min_words": 1,
-                "false_interruption_timeout": 0.8,
-                "resume_false_interruption": True,
-            },
-            # Start both generation and local Piper synthesis before final turn
-            # confirmation. With one-call workloads this trades spare CPU for
-            # noticeably lower conversational latency.
-            preemptive_generation={
-                "enabled": True,
-                "preemptive_tts": True,
-                "max_speech_duration": 8.0,
-                "max_retries": 2,
-            },
-        ),
+        preemptive_generation=True,
+        min_endpointing_delay=0.34,
+        max_endpointing_delay=0.90,
+        # Telephone lines contain clicks, breaths and background speech.
+        # Require a clearer interruption so Lumin does not stop mid-sentence.
+        min_interruption_duration=0.65,
+        min_interruption_words=2,
+        resume_false_interruption=True,
     )
 
     @session.on("conversation_item_added")
