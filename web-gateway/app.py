@@ -413,3 +413,5 @@ h1{color:#ffdda0;margin:0 0 8px;font-size:38px}.muted{color:#9e978b}.ok{color:#7
 </head>
 <body><main><h1>LUMIN AI</h1><p class="muted">Voice Gateway online</p><p class="ok">● operacional</p><p class="muted">WebRTC + outbound SIP gateway + Voice Studio</p></main></body>
 </html>"""
+
+# voice-studio-env-refresh
