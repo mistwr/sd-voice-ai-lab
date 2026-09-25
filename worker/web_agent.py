@@ -92,18 +92,17 @@ class LuminAgent(Agent):
         super().__init__(instructions=build_instructions())
 
     async def on_enter(self):
-        self.session.generate_reply(
+        await self.session.generate_reply(
             instructions=(
                 "Cumprimenta em português de Portugal. Diz que és o Lumin, "
                 "assistente virtual da LUMIN AI, e que esta conversa é por voz "
                 "em tempo real. Termina com uma única pergunta curta."
-            )
+            ),
+            allow_interruptions=True,
         )
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     metadata = {}
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
@@ -123,7 +122,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(agent=LuminAgent(), room=ctx.room)
-    await session.wait_for_end()
+    await ctx.connect()
 
 
 if __name__ == "__main__":
