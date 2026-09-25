@@ -7,6 +7,7 @@ request is made when this adapter is active.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from livekit.agents import tts
@@ -15,13 +16,29 @@ from livekit.agents.utils import shortuuid
 from piper import PiperVoice, SynthesisConfig
 
 
+def _prepare_ptpt_text(text: str) -> str:
+    """Light cleanup for clearer European-Portuguese neural speech."""
+    text = re.sub(r"[\*_#`~]+", " ", text)
+    text = text.replace("&", " e ")
+    text = re.sub(r"\bIA\b", "I A", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bAI\b", "A I", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bGPT\b", "G P T", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bLLM\b", "L L M", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bWebRTC\b", "Web R T C", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 class PiperTTS(tts.TTS):
     def __init__(
         self,
         model_path: str,
         *,
         config_path: str | None = None,
-        length_scale: float = 0.96,
+        length_scale: float = 1.02,
+        noise_scale: float = 0.52,
+        noise_w_scale: float = 0.62,
+        volume: float = 0.96,
     ) -> None:
         model = Path(model_path)
         if not model.exists():
@@ -34,7 +51,10 @@ class PiperTTS(tts.TTS):
         )
         self._syn_config = SynthesisConfig(
             length_scale=length_scale,
+            noise_scale=noise_scale,
+            noise_w_scale=noise_w_scale,
             normalize_audio=True,
+            volume=volume,
         )
 
         super().__init__(
@@ -49,7 +69,7 @@ class PiperTTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Piper local"
+        return "Piper PT-PT tuned"
 
     def synthesize(
         self,
@@ -91,12 +111,11 @@ class PiperChunkedStream(tts.ChunkedStream):
             stream=False,
         )
 
-        # Piper/ONNX is CPU-bound. Run synthesis away from the asyncio loop so
-        # microphone/STT handling remains responsive while Lumin is speaking.
+        prepared = _prepare_ptpt_text(self._input_text)
         chunks = await asyncio.to_thread(
             lambda: list(
                 self._piper._voice.synthesize(
-                    self._input_text,
+                    prepared,
                     syn_config=self._piper._syn_config,
                 )
             )
