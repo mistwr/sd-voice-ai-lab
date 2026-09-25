@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import time
 import uuid
 from typing import Any
@@ -29,6 +31,10 @@ LUMIN_OUTBOUND_TRUNK_NAME = os.getenv(
 LUMIN_CALLER_ID = os.getenv("LUMIN_CALLER_ID", "")
 LUMIN_AGENT_NAME = os.getenv("LUMIN_AGENT_NAME", "lumin-web")
 
+LUMIN_PLATFORM_PASSWORD_HASH = os.getenv("LUMIN_PLATFORM_PASSWORD_HASH", "")
+LUMIN_PLATFORM_SESSION_SECRET = os.getenv("LUMIN_PLATFORM_SESSION_SECRET", "")
+LUMIN_PLATFORM_SESSION_TTL = 60 * 60 * 8
+
 logger = logging.getLogger("lumin-voice-gateway")
 logging.basicConfig(level=logging.INFO)
 
@@ -49,13 +55,35 @@ app.add_middleware(
 
 _CALLS: dict[str, dict[str, Any]] = {}
 _LAST_CALL_AT = 0.0
-_TEST_CALL_USED = False
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 
 class OutboundCallRequest(BaseModel):
     phone: str = Field(..., description="Destination in E.164, e.g. +351912345678")
     name: str = Field(default="Cliente", max_length=100)
+
+
+class PlatformLoginRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=200)
+
+
+class AgentProfile(BaseModel):
+    id: str = Field(default="lumin", max_length=80)
+    name: str = Field(default="Lumin", max_length=80)
+    company: str = Field(default="LUMIN AI", max_length=120)
+    objective: str = Field(default="Conversar e ajudar", max_length=500)
+    product: str = Field(default="", max_length=1200)
+    offer: str = Field(default="", max_length=1200)
+    opening: str = Field(default="", max_length=800)
+    objections: str = Field(default="", max_length=1800)
+    notes: str = Field(default="", max_length=2200)
+    tone: str = Field(default="Natural, profissional e direto", max_length=300)
+
+
+class PlatformCallRequest(BaseModel):
+    phone: str = Field(..., description="Destination in E.164")
+    name: str = Field(default="Cliente", max_length=100)
+    agent: AgentProfile = Field(default_factory=AgentProfile)
 
 
 def _require_call_key(x_lumin_key: str | None) -> None:
@@ -65,8 +93,61 @@ def _require_call_key(x_lumin_key: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid call API key")
 
 
+def _password_ok(code: str) -> bool:
+    if not LUMIN_PLATFORM_PASSWORD_HASH:
+        return False
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(digest, LUMIN_PLATFORM_PASSWORD_HASH)
+
+
+def _create_platform_token() -> str:
+    if not LUMIN_PLATFORM_SESSION_SECRET:
+        raise HTTPException(status_code=503, detail="Platform session is not configured")
+    exp = int(time.time()) + LUMIN_PLATFORM_SESSION_TTL
+    nonce = secrets.token_urlsafe(12)
+    payload = f"{exp}.{nonce}"
+    sig = hmac.new(
+        LUMIN_PLATFORM_SESSION_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _require_platform_session(authorization: str | None) -> None:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Platform session required")
+    token = authorization[7:].strip()
+    try:
+        exp_text, nonce, sig = token.split(".", 2)
+        exp = int(exp_text)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid platform session")
+
+    if exp < int(time.time()):
+        raise HTTPException(status_code=401, detail="Platform session expired")
+
+    payload = f"{exp}.{nonce}"
+    expected = hmac.new(
+        LUMIN_PLATFORM_SESSION_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        raise HTTPException(status_code=401, detail="Invalid platform session")
+
+
+def _normalise_phone(phone: str) -> str:
+    phone = phone.strip().replace(" ", "").replace("-", "")
+    if not _PHONE_RE.fullmatch(phone):
+        raise HTTPException(
+            status_code=400,
+            detail="phone must be in E.164 format, for example +351912345678",
+        )
+    return phone
+
+
 def _response_items(message: Any) -> list[Any]:
-    """Handle LiveKit protocol response field names across SDK versions."""
     for field in ("items", "trunks", "sip_outbound_trunks"):
         value = getattr(message, field, None)
         if value:
@@ -81,7 +162,6 @@ async def _find_lumin_trunk(lkapi: api.LiveKitAPI):
         if getattr(trunk, "name", "") == LUMIN_OUTBOUND_TRUNK_NAME:
             return trunk
 
-    # Fallback for older trunk created before the naming convention.
     for trunk in trunks:
         address = (
             getattr(trunk, "address", "")
@@ -96,7 +176,12 @@ async def _find_lumin_trunk(lkapi: api.LiveKitAPI):
     )
 
 
-async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
+async def _run_outbound_call(
+    call_id: str,
+    phone: str,
+    name: str,
+    agent_profile: dict[str, Any] | None = None,
+) -> None:
     state = _CALLS[call_id]
     room_name = state["roomName"]
 
@@ -114,19 +199,25 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
             state["status"] = "ringing"
             logger.info("call %s ringing via trunk %s", call_id, trunk_id)
 
+            common_metadata = {
+                "mode": "outbound",
+                "callId": call_id,
+                "phone": phone,
+                "name": name,
+            }
+            if agent_profile:
+                common_metadata["agentProfile"] = agent_profile
+
             req_kwargs: dict[str, Any] = {
                 "sip_trunk_id": trunk_id,
                 "sip_call_to": phone,
                 "room_name": room_name,
                 "participant_identity": f"callee-{call_id}",
                 "participant_name": name,
-                "participant_metadata": json.dumps(
-                    {"mode": "outbound", "callId": call_id, "phone": phone, "name": name}
-                ),
+                "participant_metadata": json.dumps(common_metadata),
                 "wait_until_answered": True,
             }
 
-            # Explicitly select the verified Portuguese caller ID when configured.
             if LUMIN_CALLER_ID:
                 req_kwargs["sip_number"] = LUMIN_CALLER_ID
 
@@ -142,21 +233,16 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
                 or getattr(sip_participant, "participant_identity", "")
             )
 
-            # Dispatch only after the callee has answered. This prevents Lumin from
-            # saying his greeting into an empty room while the phone is still ringing.
+            dispatch_metadata = {
+                **common_metadata,
+                "source": "lumin-call-api",
+            }
+
             dispatch = await lkapi.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(
                     agent_name=LUMIN_AGENT_NAME,
                     room=room_name,
-                    metadata=json.dumps(
-                        {
-                            "mode": "outbound",
-                            "source": "lumin-call-api",
-                            "callId": call_id,
-                            "phone": phone,
-                            "name": name,
-                        }
-                    ),
+                    metadata=json.dumps(dispatch_metadata),
                 )
             )
 
@@ -170,12 +256,38 @@ async def _run_outbound_call(call_id: str, phone: str, name: str) -> None:
         logger.exception("call %s failed: %s", call_id, exc)
 
 
+def _queue_call(phone: str, name: str, agent_profile: dict[str, Any] | None = None):
+    global _LAST_CALL_AT
+
+    now = time.monotonic()
+    if now - _LAST_CALL_AT < 1.2:
+        raise HTTPException(status_code=429, detail="Wait a moment before starting another call")
+    _LAST_CALL_AT = now
+
+    call_id = uuid.uuid4().hex[:12]
+    room_name = f"lumin-call-{call_id}"
+    _CALLS[call_id] = {
+        "callId": call_id,
+        "status": "queued",
+        "phone": phone,
+        "name": name,
+        "roomName": room_name,
+        "createdAt": time.time(),
+        "agent": agent_profile or {},
+    }
+    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile))
+    return _CALLS[call_id]
+
+
 @app.get("/health")
 async def health():
     return {
         "ok": True,
         "service": "lumin-voice-gateway",
         "outboundConfigured": bool(LUMIN_CALL_API_KEY),
+        "platformConfigured": bool(
+            LUMIN_PLATFORM_PASSWORD_HASH and LUMIN_PLATFORM_SESSION_SECRET
+        ),
     }
 
 
@@ -187,12 +299,7 @@ async def create_token():
     room_name = f"lumin-web-{uuid.uuid4().hex[:12]}"
     identity = f"visitor-{uuid.uuid4().hex[:10]}"
 
-    metadata = json.dumps(
-        {
-            "mode": "web",
-            "source": "luminai.pt",
-        }
-    )
+    metadata = json.dumps({"mode": "web", "source": "luminai.pt"})
 
     token = (
         api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -219,11 +326,7 @@ async def create_token():
         .to_jwt()
     )
 
-    return {
-        "serverUrl": LIVEKIT_URL,
-        "token": token,
-        "roomName": room_name,
-    }
+    return {"serverUrl": LIVEKIT_URL, "token": token, "roomName": room_name}
 
 
 @app.post("/api/call")
@@ -231,70 +334,15 @@ async def start_outbound_call(
     payload: OutboundCallRequest,
     x_lumin_key: str | None = Header(default=None, alias="X-Lumin-Key"),
 ):
-    global _LAST_CALL_AT
-
     _require_call_key(x_lumin_key)
-
-    phone = payload.phone.strip().replace(" ", "")
-    if not _PHONE_RE.fullmatch(phone):
-        raise HTTPException(
-            status_code=400,
-            detail="phone must be in E.164 format, for example +351912345678",
-        )
-
-    # The Twilio trunk currently allows one new call setup per second.
-    now = time.monotonic()
-    if now - _LAST_CALL_AT < 1.2:
-        raise HTTPException(status_code=429, detail="Wait a moment before starting another call")
-    _LAST_CALL_AT = now
-
-    call_id = uuid.uuid4().hex[:12]
-    room_name = f"lumin-call-{call_id}"
-    _CALLS[call_id] = {
-        "callId": call_id,
-        "status": "queued",
-        "phone": phone,
-        "name": payload.name,
-        "roomName": room_name,
-        "createdAt": time.time(),
-    }
-
-    asyncio.create_task(_run_outbound_call(call_id, phone, payload.name))
-
+    phone = _normalise_phone(payload.phone)
+    state = _queue_call(phone, payload.name)
     return {
         "ok": True,
-        "callId": call_id,
-        "status": "queued",
-        "roomName": room_name,
+        "callId": state["callId"],
+        "status": state["status"],
+        "roomName": state["roomName"],
     }
-
-
-@app.post("/api/test-call-once")
-async def test_call_once():
-    global _TEST_CALL_USED
-    if _TEST_CALL_USED:
-        raise HTTPException(status_code=410, detail="Test call already used")
-    _TEST_CALL_USED = True
-
-    call_id = uuid.uuid4().hex[:12]
-    room_name = f"lumin-call-{call_id}"
-    phone = "+351923343490"
-    name = "Teste Lumin"
-    _CALLS[call_id] = {
-        "callId": call_id,
-        "status": "queued",
-        "phone": phone,
-        "name": name,
-        "roomName": room_name,
-        "createdAt": time.time(),
-        "oneShotTest": True,
-    }
-    try:
-        await asyncio.wait_for(_run_outbound_call(call_id, phone, name), timeout=75)
-    except asyncio.TimeoutError:
-        _CALLS[call_id]["status"] = "timeout"
-        _CALLS[call_id]["error"] = "debug call timed out"
-    return _CALLS[call_id]
 
 
 @app.get("/api/call/{call_id}")
@@ -303,6 +351,46 @@ async def outbound_call_status(
     x_lumin_key: str | None = Header(default=None, alias="X-Lumin-Key"),
 ):
     _require_call_key(x_lumin_key)
+    state = _CALLS.get(call_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Unknown call ID")
+    return state
+
+
+@app.post("/api/platform/login")
+async def platform_login(payload: PlatformLoginRequest):
+    if not _password_ok(payload.code):
+        raise HTTPException(status_code=401, detail="Código de acesso inválido")
+    return {
+        "ok": True,
+        "token": _create_platform_token(),
+        "expiresIn": LUMIN_PLATFORM_SESSION_TTL,
+    }
+
+
+@app.post("/api/platform/call")
+async def platform_call(
+    payload: PlatformCallRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
+    phone = _normalise_phone(payload.phone)
+    profile = payload.agent.model_dump()
+    state = _queue_call(phone, payload.name, profile)
+    return {
+        "ok": True,
+        "callId": state["callId"],
+        "status": state["status"],
+        "roomName": state["roomName"],
+    }
+
+
+@app.get("/api/platform/call/{call_id}")
+async def platform_call_status(
+    call_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
     state = _CALLS.get(call_id)
     if not state:
         raise HTTPException(status_code=404, detail="Unknown call ID")
@@ -323,5 +411,5 @@ main{width:min(520px,92vw);text-align:center;padding:36px;border:1px solid #3327
 h1{color:#ffdda0;margin:0 0 8px;font-size:38px}.muted{color:#9e978b}.ok{color:#79e79d}
 </style>
 </head>
-<body><main><h1>LUMIN AI</h1><p class="muted">Voice Gateway online</p><p class="ok">● operacional</p><p class="muted">WebRTC + outbound SIP gateway</p></main></body>
+<body><main><h1>LUMIN AI</h1><p class="muted">Voice Gateway online</p><p class="ok">● operacional</p><p class="muted">WebRTC + outbound SIP gateway + Voice Studio</p></main></body>
 </html>"""
