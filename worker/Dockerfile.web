@@ -10,15 +10,16 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements-web.txt .
 RUN pip install --no-cache-dir -r requirements-web.txt
 
-# Portuguese (Portugal) open-source Piper voice "tugão".
-# Use percent-encoded Hugging Face URLs because urllib's voice downloader
-# currently chokes on the non-ASCII voice name in the request path.
+# Piper PT-PT kept as a lightweight fallback.
 RUN mkdir -p /app/voices \
     && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx?download=true','/app/voices/lumin-ptpt.onnx'); urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json?download=true','/app/voices/lumin-ptpt.onnx.json')"
 
-COPY web_agent.py piper_tts.py ./
+# Pre-download and warm the dedicated European-Portuguese Kokoro model so the
+# first call does not wait for model download.
+RUN python -c "from tts_eu_pt import TTS; t=TTS(); w=t.say('Olá. O Lumin está pronto para falar em português de Portugal.'); print('Kokoro PT-PT warm:', len(w))"
 
-# Best-effort prewarm/download for any LiveKit local helper assets.
+COPY web_agent.py piper_tts.py kokoro_ptpt_tts.py ./
+
 RUN python web_agent.py download-files || true
 
 CMD ["python", "web_agent.py", "start"]
