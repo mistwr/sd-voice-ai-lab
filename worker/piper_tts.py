@@ -50,16 +50,19 @@ class PiperTTS(tts.TTS):
         noise_scale: float = 0.40,
         noise_w_scale: float = 0.46,
         volume: float = 0.94,
+        voice: PiperVoice | None = None,
     ) -> None:
-        model = Path(model_path)
-        if not model.exists():
-            raise FileNotFoundError(f"Piper model not found: {model}")
-
-        self._voice = PiperVoice.load(
-            model,
-            config_path=config_path,
-            use_cuda=False,
-        )
+        if voice is None:
+            model = Path(model_path)
+            if not model.exists():
+                raise FileNotFoundError(f"Piper model not found: {model}")
+            self._voice = PiperVoice.load(
+                model,
+                config_path=config_path,
+                use_cuda=False,
+            )
+        else:
+            self._voice = voice
         self._syn_config = SynthesisConfig(
             length_scale=length_scale,
             noise_scale=noise_scale,
@@ -81,6 +84,24 @@ class PiperTTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Piper PT-PT tuned"
+
+    def with_profile(
+        self,
+        *,
+        length_scale: float,
+        noise_scale: float,
+        noise_w_scale: float,
+        volume: float,
+    ) -> "PiperTTS":
+        """Create a lightweight speaking-style variant without reloading the ONNX voice."""
+        return PiperTTS(
+            "__shared_voice__",
+            voice=self._voice,
+            length_scale=length_scale,
+            noise_scale=noise_scale,
+            noise_w_scale=noise_w_scale,
+            volume=volume,
+        )
 
     def synthesize(
         self,
@@ -123,16 +144,31 @@ class PiperChunkedStream(tts.ChunkedStream):
         )
 
         prepared = _prepare_ptpt_text(self._input_text)
-        chunks = await asyncio.to_thread(
-            lambda: list(
-                self._piper._voice.synthesize(
-                    prepared,
-                    syn_config=self._piper._syn_config,
+
+        # Synthesize sentence by sentence. This lowers time-to-first-audio and
+        # gives telephone speech a natural micro-pause instead of one long block.
+        sentences = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?])\\s+", prepared)
+            if s.strip()
+        ] or [prepared]
+
+        for index, sentence in enumerate(sentences):
+            chunks = await asyncio.to_thread(
+                lambda s=sentence: list(
+                    self._piper._voice.synthesize(
+                        s,
+                        syn_config=self._piper._syn_config,
+                    )
                 )
             )
-        )
+            for chunk in chunks:
+                output_emitter.push(chunk.audio_int16_bytes)
 
-        for chunk in chunks:
-            output_emitter.push(chunk.audio_int16_bytes)
+            # About 110 ms between complete ideas: enough to sound human without
+            # making the conversation sluggish.
+            if index < len(sentences) - 1:
+                silence_samples = int(self._piper.sample_rate * 0.11)
+                output_emitter.push(b"\\x00\\x00" * silence_samples)
 
         output_emitter.flush()
