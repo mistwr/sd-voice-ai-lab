@@ -26,6 +26,7 @@ logger.setLevel(logging.INFO)
 
 _PIPER: PiperTTS | None = None
 _KOKORO: KokoroPtPTTTS | None = None
+GREETING = "Olá! Sou o Lumin. Em que posso ajudar?"
 
 
 def get_piper() -> PiperTTS:
@@ -68,8 +69,10 @@ def prewarm(proc: JobProcess) -> None:
     """Load the heavy PT-PT voice before a visitor starts a call."""
     logger.info("prewarming Kokoro PT-PT voice")
     try:
-        proc.userdata["lumin_tts"] = get_kokoro()
-        logger.info("Kokoro PT-PT prewarm complete")
+        voice = get_kokoro()
+        voice.precache(GREETING)
+        proc.userdata["lumin_tts"] = voice
+        logger.info("Kokoro PT-PT prewarm complete, greeting cached")
     except Exception:
         logger.exception("Kokoro prewarm failed; prewarming Piper fallback")
         proc.userdata["lumin_tts"] = get_piper()
@@ -91,6 +94,7 @@ IDENTIDADE
 FORMA DE FALAR
 - Isto é uma conversa de voz, não um texto escrito.
 - Usa frases curtas e naturais.
+- Numa conversa normal, responde primeiro em uma ou duas frases curtas; desenvolve apenas se te pedirem.
 - Faz uma pergunta de cada vez.
 - Ouve mais do que falas.
 - Se fores interrompido, pára e responde ao que a pessoa acabou de dizer.
@@ -124,13 +128,6 @@ class LuminAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=build_instructions())
 
-    async def on_enter(self):
-        # Fast deterministic greeting: skip the LLM for the first sentence so
-        # the visitor hears Lumin as soon as the audio room is ready.
-        await self.session.say(
-            "Olá! Sou o Lumin. Em que posso ajudar?",
-            allow_interruptions=True,
-        )
 
 
 async def entrypoint(ctx: JobContext):
@@ -160,6 +157,9 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
+        preemptive_generation=True,
+        min_endpointing_delay=0.25,
+        max_endpointing_delay=1.0,
     )
 
     @session.on("conversation_item_added")
@@ -174,6 +174,10 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(agent=LuminAgent(), room=ctx.room)
     await ctx.connect()
+
+    # Speak only after the WebRTC room is connected. The exact PCM for this
+    # greeting is pre-generated during worker warm-up, so there is no TTS wait.
+    await session.say(GREETING, allow_interruptions=False)
 
 
 if __name__ == "__main__":
