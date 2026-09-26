@@ -24,6 +24,17 @@ def _prepare_ptpt_text(text: str) -> str:
     """Light cleanup for clearer European-Portuguese neural speech."""
     text = re.sub(r"[\*_#`~]+", " ", text)
     text = text.replace("&", " e ")
+    text = text.replace("—", ", ").replace("–", ", ")
+    # Keep the spoken layer Portuguese even if the model/context contains
+    # common English sales/tech jargon.
+    text = re.sub(r"\bleads?\b", "contactos potenciais", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfollow[- ]?up\b", "acompanhamento", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bwebsites?\b", "sites", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bapps?\b", "aplicações", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bworkflows?\b", "fluxos de trabalho", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bchatbots?\b", "assistentes virtuais", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bcall[ -]?center\b", "centro de atendimento", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bLUMIN AI\b", "Lúmin I A", text)
     text = re.sub(r"\bIA\b", "I A", text)
     text = re.sub(r"\bAI\b", "A I", text)
     text = re.sub(r"\bGPT\b", "G P T", text)
