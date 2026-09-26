@@ -241,6 +241,26 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=True,
     )
 
+    @session.on("metrics_collected")
+    def _log_voice_metrics(ev):
+        m = ev.metrics
+        values = {
+            "metric_type": m.__class__.__name__,
+            "speech_id": getattr(m, "speech_id", None),
+            "label": getattr(m, "label", None),
+            "eou_delay": getattr(m, "end_of_utterance_delay", None),
+            "transcription_delay": getattr(m, "transcription_delay", None),
+            "ttft": getattr(m, "ttft", None),
+            "ttfb": getattr(m, "ttfb", None),
+            "duration": getattr(m, "duration", None),
+            "audio_duration": getattr(m, "audio_duration", None),
+            "cancelled": getattr(m, "cancelled", None),
+        }
+        logger.info(
+            "voice metric",
+            extra={k: v for k, v in values.items() if v is not None},
+        )
+
     @session.on("conversation_item_added")
     def _log_conversation(ev):
         item = ev.item
