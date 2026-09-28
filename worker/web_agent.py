@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
+from chatterbox_tts import ChatterboxRemoteTTS
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -129,6 +130,7 @@ qualificação de contactos e ferramentas à medida.
     sections = [
         ("NOME DO AGENTE", _clean(profile.get("name"), 80)),
         ("EMPRESA / MARCA", _clean(profile.get("company"), 120)),
+        ("DESCRIÇÃO / PERSONALIDADE", _clean(profile.get("description"), 900)),
         ("OBJETIVO DA CHAMADA", _clean(profile.get("objective"), 500)),
         ("PRODUTO / SERVIÇO", _clean(profile.get("product"), 1200)),
         ("OFERTA / CONDIÇÕES AUTORIZADAS", _clean(profile.get("offer"), 1200)),
@@ -222,9 +224,35 @@ async def entrypoint(ctx: JobContext):
 
     base_tts = ctx.proc.userdata.get("lumin_tts") or get_piper()
     voice_id = _voice_id_from_profile(profile) if isinstance(profile, dict) else "natural"
-    tts_engine = voice_for_profile(base_tts, voice_id)
+    voice_engine = _clean(profile.get("voiceEngine"), 40).lower() if isinstance(profile, dict) else ""
+    voice_source = _clean(profile.get("voiceSource"), 40).lower() if isinstance(profile, dict) else ""
+    voice_sample_url = _clean(profile.get("voiceSampleUrl"), 4000) if isinstance(profile, dict) else ""
+    chatterbox_url = os.getenv("CHATTERBOX_TTS_URL", "").strip()
 
-    logger.info("voice profile selected", extra={"voice_profile": voice_id})
+    wants_chatterbox = voice_engine == "chatterbox" or voice_id in ("neural", "custom")
+    if wants_chatterbox and chatterbox_url:
+        if voice_id == "custom" and not voice_sample_url:
+            logger.warning("custom voice requested without a signed sample URL; using system Chatterbox voice")
+        tts_engine = ChatterboxRemoteTTS(
+            chatterbox_url,
+            audio_prompt_url=voice_sample_url if voice_id == "custom" else "",
+            language_id="pt",
+        )
+        selected_engine = "chatterbox-custom" if voice_id == "custom" and voice_sample_url else "chatterbox-system"
+    else:
+        if wants_chatterbox and not chatterbox_url:
+            logger.warning("Chatterbox requested but CHATTERBOX_TTS_URL is missing; falling back to Piper")
+        tts_engine = voice_for_profile(base_tts, voice_id)
+        selected_engine = "piper"
+
+    logger.info(
+        "voice profile selected",
+        extra={
+            "voice_profile": voice_id,
+            "voice_engine": selected_engine,
+            "voice_source": voice_source or "system",
+        },
+    )
 
     session = AgentSession(
         vad=inference.VAD(),
