@@ -135,12 +135,14 @@ except Exception as exc:
 
 @app.get("/health")
 def health():
-    return jsonify({
-        "ok": converter is not None and piper_voice is not None and source_se is not None,
+    ready = converter is not None and piper_voice is not None and source_se is not None
+    body = {
+        "ok": ready,
         "engine": "OpenVoice V2 + Piper PT-PT",
         "device": device,
         "error": init_error or None,
-    })
+    }
+    return jsonify(body), (200 if ready else 503)
 
 
 @app.post("/synthesize")
