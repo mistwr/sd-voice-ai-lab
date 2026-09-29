@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ffmpeg wget unzip libsndfile1 build-essential espeak-ng \
+    && apt-get install -y --no-install-recommends git ffmpeg wget unzip libsndfile1 build-essential pkg-config espeak-ng libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2+cpu torchaudio==2.2.2+cpu
