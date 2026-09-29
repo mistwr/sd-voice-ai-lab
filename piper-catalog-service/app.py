@@ -47,7 +47,7 @@ class SynthesisRequest(BaseModel):
 
 def _safe_key(value: str) -> str:
     key = str(value or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,120}", key):
+    if not re.fullmatch(r"[\w.-]{3,120}", key, flags=re.UNICODE):
         raise HTTPException(status_code=400, detail="Invalid voice key")
     return key
 
