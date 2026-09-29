@@ -51,6 +51,7 @@ logger = logging.getLogger("lumin-voice-gateway")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="LUMIN Voice Gateway")
+# Realtime browser agent-profile dispatch enabled
 
 app.add_middleware(
     CORSMiddleware,
