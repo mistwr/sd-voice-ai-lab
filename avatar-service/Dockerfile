@@ -20,8 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN bash scripts/download_models.sh
 
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi==0.116.1 uvicorn[standard]==0.35.0 httpx==0.28.1 pydantic==2.11.7
+RUN pip install --no-cache-dir flask==3.1.2 gunicorn==23.0.0
 COPY avatar-service/app.py ./app.py
 
 EXPOSE 8080
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 4 --timeout 1300 app:app"]
