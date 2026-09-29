@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
+import wave
 import hmac
 import json
 import logging
@@ -720,14 +722,35 @@ async def platform_voice_preview(
         raise HTTPException(status_code=400, detail="Voz desconhecida")
 
     audio, headers = await asyncio.to_thread(_voice_preview_bytes, base_url, body, timeout)
-    sample_rate = headers.get("x-sample-rate", "24000")
+    try:
+        sample_rate = int(headers.get("x-sample-rate", "24000"))
+    except Exception:
+        sample_rate = 24000
+    channels = 1
+    try:
+        channels = max(1, int(headers.get("x-channels", "1")))
+    except Exception:
+        channels = 1
+
+    if "audio/pcm" in headers.get("content-type", "audio/pcm"):
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio)
+        audio = wav_buffer.getvalue()
+        media_type = "audio/wav"
+    else:
+        media_type = headers.get("content-type", "audio/wav")
+
     return Response(
         content=audio,
-        media_type=headers.get("content-type", "audio/pcm"),
+        media_type=media_type,
         headers={
             "Cache-Control": "no-store",
-            "X-Sample-Rate": sample_rate,
-            "X-Channels": headers.get("x-channels", "1"),
+            "X-Sample-Rate": str(sample_rate),
+            "X-Channels": str(channels),
             "X-Lumin-Voice": headers.get("x-lumin-voice", voice),
         },
     )
