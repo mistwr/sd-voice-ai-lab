@@ -20,6 +20,7 @@ from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
 from openvoice_tts import OpenVoiceRemoteTTS
+from piper_catalog_tts import PiperCatalogRemoteTTS
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -232,11 +233,20 @@ async def entrypoint(ctx: JobContext):
     chatterbox_url = os.getenv("CHATTERBOX_TTS_URL", "").strip()
     openvoice_url = os.getenv("OPENVOICE_TTS_URL", "").strip()
     kokoro_url = os.getenv("KOKORO_TTS_URL", "").strip()
+    piper_catalog_url = os.getenv("PIPER_CATALOG_TTS_URL", "").strip()
     wants_custom = voice_id == "custom" or voice_source == "custom"
     wants_chatterbox = voice_engine == "chatterbox" or voice_id == "neural"
     wants_kokoro = voice_engine == "kokoro" or voice_id == "kokoro"
+    wants_catalog = voice_engine == "piper-catalog" or voice_id.startswith("piper:")
+    catalog_key = voice_id.split(":", 1)[1] if voice_id.startswith("piper:") else voice_id
 
-    if wants_custom and openvoice_url and voice_sample_url:
+    if wants_catalog and piper_catalog_url and catalog_key:
+        tts_engine = PiperCatalogRemoteTTS(
+            piper_catalog_url,
+            voice_key=catalog_key,
+        )
+        selected_engine = f"piper-catalog:{catalog_key}"
+    elif wants_custom and openvoice_url and voice_sample_url:
         tts_engine = OpenVoiceRemoteTTS(
             openvoice_url,
             audio_prompt_url=voice_sample_url,
@@ -262,6 +272,8 @@ async def entrypoint(ctx: JobContext):
         )
         selected_engine = "chatterbox-system"
     else:
+        if wants_catalog and not piper_catalog_url:
+            logger.warning("Piper catalog voice requested but PIPER_CATALOG_TTS_URL is missing; falling back to default Piper")
         if wants_custom and not voice_sample_url:
             logger.warning("custom voice requested without a signed sample URL; falling back to Piper")
         if wants_kokoro and not kokoro_url:
