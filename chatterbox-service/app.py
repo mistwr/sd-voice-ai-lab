@@ -49,7 +49,6 @@ async def startup() -> None:
         model = await asyncio.to_thread(
             ChatterboxMultilingualTTS.from_pretrained,
             device=device,
-            t3_model="v3",
         )
         logger.info("Chatterbox ready; sample_rate=%s", getattr(model, "sr", 24000))
     except Exception as exc:
