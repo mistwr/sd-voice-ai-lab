@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, TurnHandlingOptions, WorkerOptions, cli, inference
 
 from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
@@ -77,7 +77,7 @@ def _clean(value: Any, limit: int = 1800) -> str:
 
 
 def _voice_id_from_profile(profile: dict[str, Any]) -> str:
-    direct = _clean(profile.get("voice"), 40)
+    direct = _clean(profile.get("voice"), 120)
     if direct:
         return direct
     tone = _clean(profile.get("tone"), 300)
@@ -101,8 +101,11 @@ REGRAS GERAIS
 - Fala em português de Portugal, de forma natural, clara e profissional.
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Usa respostas curtas, normalmente uma ou duas frases, e faz uma pergunta de cada vez.
-- Em conversa normal, tenta não passar de cerca de vinte e cinco palavras antes de devolver a vez à pessoa.
+- Em conversa normal, tenta não passar de cerca de vinte palavras antes de devolver a vez à pessoa. Só alonga quando a pessoa pedir explicação.
+- Começa pela resposta útil, sem introduções desnecessárias.
 - Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
+- Não enchas silêncio com texto. Uma confirmação curta seguida de uma pergunta é melhor do que um parágrafo.
+- Se a pessoa disser apenas "sim", "não", "espere", "certo" ou equivalente, reage imediatamente ao significado dessa palavra.
 - Se tiveres muita informação, divide-a por várias intervenções em vez de despejar tudo numa resposta.
 - Depois de a pessoa responder, quando soar natural usa uma confirmação muito curta como frase independente, por exemplo "Certo.", "Entendo.", "Faz sentido." ou "Percebo.". Varia e não comeces todas as respostas da mesma maneira.
 - Fala como numa conversa real: não recites o guião, não repitas a pergunta do cliente e evita frases demasiado perfeitas ou formais.
@@ -292,19 +295,46 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
+    # Natural turn-taking: detect the end of a Portuguese sentence instead of
+    # treating every short pause as a finished turn. Real barge-ins such as
+    # "não", "espere" or "sim" must still stop the agent quickly.
+    fast_tts = selected_engine == "piper" or selected_engine.startswith("piper-catalog:")
+    turn_handling = TurnHandlingOptions(
+        turn_detection=inference.TurnDetector(),
+        endpointing={
+            "mode": "dynamic",
+            "min_delay": 0.30,
+            "max_delay": 1.35,
+            "alpha": 0.72,
+        },
+        interruption={
+            "enabled": True,
+            "mode": "adaptive",
+            "min_duration": 0.30,
+            "min_words": 1,
+            "false_interruption_timeout": 1.20,
+            "resume_false_interruption": True,
+        },
+        preemptive_generation={
+            "enabled": True,
+            # Piper is cheap enough to synthesize speculatively. For neural
+            # cloning engines keep only LLM pre-generation to avoid wasting
+            # expensive TTS when the transcript changes.
+            "preemptive_tts": fast_tts,
+            "max_speech_duration": 7.0,
+            "max_retries": 2,
+        },
+    )
+
     session = AgentSession(
         vad=inference.VAD(),
         stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
-        preemptive_generation=True,
-        min_endpointing_delay=0.34,
-        max_endpointing_delay=0.90,
-        # Telephone lines contain clicks, breaths and background speech.
-        # Require a clearer interruption so Lumin does not stop mid-sentence.
-        min_interruption_duration=0.65,
-        min_interruption_words=2,
-        resume_false_interruption=True,
+        turn_handling=turn_handling,
+        # A tiny breath between adjacent agent utterances sounds much more
+        # natural than stitching them together with no gap.
+        min_consecutive_speech_delay=0.18,
     )
 
     @session.on("metrics_collected")
