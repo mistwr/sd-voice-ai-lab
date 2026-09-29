@@ -13,10 +13,12 @@ class OpenVoiceRemoteTTS(tts.TTS):
         base_url: str,
         *,
         audio_prompt_url: str,
+        fallback_url: str = "",
         sample_rate: int = 22050,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._audio_prompt_url = audio_prompt_url.strip()
+        self._fallback_url = fallback_url.rstrip("/")
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
@@ -67,20 +69,35 @@ class OpenVoiceChunkedStream(tts.ChunkedStream):
             raise RuntimeError("Custom voice sample is missing")
 
         timeout = httpx.Timeout(connect=8.0, read=65.0, write=10.0, pool=8.0)
+        sample_rate = self._openvoice.sample_rate
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{self._openvoice._base_url}/synthesize",
-                json={
-                    "text": self._input_text,
-                    "audio_prompt_url": self._openvoice._audio_prompt_url,
-                },
-            )
-            response.raise_for_status()
-            pcm16 = response.content
             try:
-                sample_rate = int(response.headers.get("X-Sample-Rate") or self._openvoice.sample_rate)
+                response = await client.post(
+                    f"{self._openvoice._base_url}/synthesize",
+                    json={
+                        "text": self._input_text,
+                        "audio_prompt_url": self._openvoice._audio_prompt_url,
+                    },
+                )
+                response.raise_for_status()
+                pcm16 = response.content
+                sample_rate = int(response.headers.get("X-Sample-Rate") or sample_rate)
             except Exception:
-                sample_rate = self._openvoice.sample_rate
+                if not self._openvoice._fallback_url:
+                    raise
+                fallback_timeout = httpx.Timeout(connect=8.0, read=180.0, write=10.0, pool=8.0)
+                async with httpx.AsyncClient(timeout=fallback_timeout) as fallback_client:
+                    fallback = await fallback_client.post(
+                        f"{self._openvoice._fallback_url}/synthesize",
+                        json={
+                            "text": self._input_text,
+                            "language_id": "pt",
+                            "audio_prompt_url": self._openvoice._audio_prompt_url,
+                        },
+                    )
+                    fallback.raise_for_status()
+                    pcm16 = fallback.content
+                    sample_rate = int(fallback.headers.get("X-Sample-Rate") or 24000)
 
         output_emitter.initialize(
             request_id=shortuuid(),
