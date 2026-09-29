@@ -92,6 +92,23 @@ def _voice_card(key: str, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@app.on_event("startup")
+async def startup_warm_default_voice():
+    # Portugal Portuguese is the most common choice in LUMIN. Warm it in the
+    # background so the first real call does not pay model download/load time.
+    async def _warm():
+        key = os.getenv("PIPER_PREWARM_VOICE", "pt_PT-tugão-medium").strip()
+        if not key:
+            return
+        try:
+            await _load_voice(key)
+            logger.info("prewarmed Piper catalog voice %s", key)
+        except Exception:
+            logger.exception("failed to prewarm Piper catalog voice %s", key)
+
+    asyncio.create_task(_warm())
+
+
 @app.get("/health")
 async def health():
     try:
