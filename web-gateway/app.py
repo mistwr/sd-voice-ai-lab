@@ -78,6 +78,7 @@ class AgentProfile(BaseModel):
     id: str = Field(default="lumin", max_length=80)
     name: str = Field(default="Lumin", max_length=80)
     company: str = Field(default="LUMIN AI", max_length=120)
+    description: str = Field(default="", max_length=900)
     objective: str = Field(default="Conversar e ajudar", max_length=500)
     product: str = Field(default="", max_length=1200)
     offer: str = Field(default="", max_length=1200)
@@ -85,6 +86,12 @@ class AgentProfile(BaseModel):
     objections: str = Field(default="", max_length=1800)
     notes: str = Field(default="", max_length=2200)
     tone: str = Field(default="Natural, profissional e direto", max_length=300)
+    voice: str = Field(default="natural", max_length=40)
+    voiceEngine: str = Field(default="piper", max_length=40)
+    voiceSource: str = Field(default="system", max_length=40)
+    voiceAssetPath: str = Field(default="", max_length=700)
+    voiceSampleUrl: str = Field(default="", max_length=5000)
+    avatarPath: str = Field(default="", max_length=700)
 
 
 class PlatformCallRequest(BaseModel):
