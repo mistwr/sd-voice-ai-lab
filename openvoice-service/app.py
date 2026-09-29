@@ -39,15 +39,21 @@ def _safe_https(url: str) -> bool:
     return parsed.scheme == "https" and bool(parsed.netloc)
 
 
-def _piper_to_wav(text: str, out_path: Path) -> None:
+def _piper_to_wav(text: str, out_path: Path, profile: str = "natural") -> None:
     if piper_voice is None:
         raise RuntimeError("Piper voice not ready")
+    profiles = {
+        "natural": dict(length_scale=1.08, noise_scale=0.38, noise_w_scale=0.43, volume=1.00),
+        "clear": dict(length_scale=1.11, noise_scale=0.30, noise_w_scale=0.36, volume=1.01),
+        "commercial": dict(length_scale=1.07, noise_scale=0.40, noise_w_scale=0.45, volume=1.02),
+    }
+    settings = profiles.get(profile, profiles["natural"])
     syn = SynthesisConfig(
-        length_scale=1.05,
-        noise_scale=0.40,
-        noise_w_scale=0.45,
+        length_scale=settings["length_scale"],
+        noise_scale=settings["noise_scale"],
+        noise_w_scale=settings["noise_w_scale"],
         normalize_audio=True,
-        volume=1.0,
+        volume=settings["volume"],
     )
     with wave.open(str(out_path), "wb") as wf:
         wf.setnchannels(1)
@@ -114,6 +120,7 @@ def init_models() -> None:
     _piper_to_wav(
         "Olá. Sou o Lumin. Esta é uma amostra de voz em português de Portugal.",
         source_ref,
+        "natural",
     )
     source_se = converter.extract_se([str(source_ref)])
 
@@ -144,31 +151,38 @@ def synthesize():
     body = request.get_json(silent=True) or {}
     text = str(body.get("text") or "").strip()
     prompt_url = str(body.get("audio_prompt_url") or "").strip()
+    voice_profile = str(body.get("voice_profile") or "natural").strip().lower()
+    if voice_profile not in {"natural","clear","commercial"}:
+        voice_profile = "natural"
     if not text:
         return jsonify({"error":"text is required"}),400
     if len(text) > 700:
         return jsonify({"error":"text too long"}),400
-    if not prompt_url:
-        return jsonify({"error":"audio_prompt_url is required for cloned voice"}),400
-    if not _safe_https(prompt_url):
+    if prompt_url and not _safe_https(prompt_url):
         return jsonify({"error":"audio_prompt_url must use https"}),400
 
     with lock:
         try:
-            tgt_se = _target_embedding(prompt_url)
             with tempfile.TemporaryDirectory(prefix="lumin-openvoice-") as td:
                 root = Path(td)
                 src = root / "source.wav"
-                out = root / "cloned.wav"
-                _piper_to_wav(text, src)
-                converter.convert(
-                    audio_src_path=str(src),
-                    src_se=source_se,
-                    tgt_se=tgt_se,
-                    output_path=str(out),
-                    message="@Lumin",
-                )
-                audio, sr = sf.read(str(out), dtype="float32", always_2d=False)
+                _piper_to_wav(text, src, voice_profile)
+                if prompt_url:
+                    tgt_se = _target_embedding(prompt_url)
+                    out = root / "cloned.wav"
+                    converter.convert(
+                        audio_src_path=str(src),
+                        src_se=source_se,
+                        tgt_se=tgt_se,
+                        output_path=str(out),
+                        message="@Lumin",
+                    )
+                    final_path = out
+                    voice_header = "openvoice-clone"
+                else:
+                    final_path = src
+                    voice_header = f"piper-{voice_profile}"
+                audio, sr = sf.read(str(final_path), dtype="float32", always_2d=False)
                 audio = np.asarray(audio, dtype=np.float32).reshape(-1)
                 audio = np.clip(audio, -1.0, 1.0)
                 pcm16 = (audio * 32767.0).astype(np.int16).tobytes()
@@ -178,7 +192,7 @@ def synthesize():
                 headers={
                     "X-Sample-Rate":str(sr),
                     "X-Channels":"1",
-                    "X-Lumin-Voice":"openvoice-clone",
+                    "X-Lumin-Voice":voice_header,
                     "Cache-Control":"no-store",
                 },
             )
