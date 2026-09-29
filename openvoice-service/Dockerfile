@@ -21,9 +21,9 @@ RUN git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /opt/OpenVoi
        "eng_to_ipa==0.0.2" "inflect==7.0.0" "Unidecode==1.3.7" \
        "pypinyin==0.50.0" "cn2an==0.5.22" "jieba==0.42.1" "langid==1.1.6"
 
-RUN wget -q https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip -O /tmp/openvoice.zip \
-    && unzip -q /tmp/openvoice.zip -d /opt/OpenVoice \
-    && rm /tmp/openvoice.zip
+RUN mkdir -p /opt/OpenVoice/checkpoints_v2/converter \
+    && wget -q --show-progress "https://huggingface.co/myshell-ai/OpenVoiceV2/resolve/main/converter/config.json?download=true" -O /opt/OpenVoice/checkpoints_v2/converter/config.json \
+    && wget -q --show-progress "https://huggingface.co/myshell-ai/OpenVoiceV2/resolve/main/converter/checkpoint.pth?download=true" -O /opt/OpenVoice/checkpoints_v2/converter/checkpoint.pth
 
 RUN pip install --no-cache-dir piper-tts==1.8.0 flask==3.1.2 gunicorn==23.0.0 soundfile==0.12.1
 
