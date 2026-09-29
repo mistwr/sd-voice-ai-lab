@@ -31,6 +31,7 @@ MAX_LOADED = max(1, int(os.getenv("PIPER_MAX_LOADED", "4")))
 CATALOG_TTL_SECONDS = 60 * 60
 
 app = FastAPI(title="LUMIN Piper Voice Catalog")
+# Railway service root: piper-catalog-service
 
 _catalog: dict[str, Any] = {}
 _catalog_loaded_at = 0.0
