@@ -1,3 +1,4 @@
+# LUMIN OpenVoice runtime
 FROM python:3.10-slim
 
 WORKDIR /app
