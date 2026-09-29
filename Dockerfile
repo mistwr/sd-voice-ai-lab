@@ -11,12 +11,16 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ffmpeg wget unzip libsndfile1 build-essential pkg-config espeak-ng libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
+    && apt-get install -y --no-install-recommends git ffmpeg wget unzip libsndfile1 build-essential espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2+cpu torchaudio==2.2.2+cpu
 RUN git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /opt/OpenVoice \
-    && pip install --no-cache-dir -e /opt/OpenVoice
+    && pip install --no-cache-dir -e /opt/OpenVoice --no-deps \
+    && pip install --no-cache-dir \
+       "numpy==1.23.5" "librosa==0.9.2" "soundfile==0.12.1" \
+       "eng_to_ipa==0.0.2" "inflect==7.0.0" "Unidecode==1.3.7" \
+       "pypinyin==0.50.0" "cn2an==0.5.22" "jieba==0.42.1" "langid==1.1.6"
 
 RUN wget -q https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip -O /tmp/openvoice.zip \
     && unzip -q /tmp/openvoice.zip -d /opt/OpenVoice \
