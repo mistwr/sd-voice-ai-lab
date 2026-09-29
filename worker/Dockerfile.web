@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements-web.txt
 RUN mkdir -p /app/voices \
     && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx?download=true','/app/voices/lumin-ptpt.onnx'); urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json?download=true','/app/voices/lumin-ptpt.onnx.json')"
 
-COPY web_agent.py piper_tts.py chatterbox_tts.py kokoro_remote_tts.py ./
+COPY web_agent.py piper_tts.py chatterbox_tts.py kokoro_remote_tts.py openvoice_tts.py ./
 
 RUN python web_agent.py download-files || true
 
