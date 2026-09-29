@@ -38,6 +38,9 @@ LUMIN_PLATFORM_PASSWORD_HASH = os.getenv("LUMIN_PLATFORM_PASSWORD_HASH", "")
 LUMIN_PLATFORM_SESSION_SECRET = os.getenv("LUMIN_PLATFORM_SESSION_SECRET", "")
 LUMIN_PLATFORM_SESSION_TTL = 60 * 60 * 8
 LUMIN_AVATAR_URL = os.getenv("LUMIN_AVATAR_URL", "http://lumin-avatar.railway.internal:8080").rstrip("/")
+LUMIN_OPENVOICE_URL = os.getenv("LUMIN_OPENVOICE_URL", "http://lumin-openvoice.railway.internal:8080").rstrip("/")
+LUMIN_KOKORO_URL = os.getenv("LUMIN_KOKORO_URL", "http://lumin-kokoro-v2.railway.internal:8080").rstrip("/")
+LUMIN_CHATTERBOX_URL = os.getenv("LUMIN_CHATTERBOX_URL", "http://lumin-chatterbox-v2.railway.internal:8080").rstrip("/")
 
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
@@ -99,6 +102,12 @@ class PlatformCallRequest(BaseModel):
     phone: str = Field(..., description="Destination in E.164")
     name: str = Field(default="Cliente", max_length=100)
     agent: AgentProfile = Field(default_factory=AgentProfile)
+
+
+class VoicePreviewRequest(BaseModel):
+    voice: str = Field(default="natural", max_length=40)
+    text: str = Field(default="Olá. Sou o teu agente Lumin.", min_length=1, max_length=350)
+    voiceSampleUrl: str = Field(default="", max_length=5000)
 
 
 class AvatarRenderRequest(BaseModel):
@@ -659,6 +668,69 @@ async def platform_call_status(
     if not state:
         raise HTTPException(status_code=404, detail="Unknown call ID")
     return state
+
+
+def _voice_preview_bytes(base_url: str, payload: dict[str, Any], timeout: int = 90) -> tuple[bytes, dict[str, str]]:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/synthesize",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
+            return response.read(), headers
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail[:1200] or "Voice preview error")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Voice engine unavailable: {exc}")
+
+
+@app.post("/api/platform/voice-preview")
+async def platform_voice_preview(
+    payload: VoicePreviewRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
+    voice = payload.voice.strip().lower()
+    text = payload.text.strip()
+
+    if voice in {"natural", "clear", "commercial"}:
+        base_url = LUMIN_OPENVOICE_URL
+        body = {"text": text, "voice_profile": voice}
+        timeout = 45
+    elif voice == "custom":
+        if not payload.voiceSampleUrl.startswith("https://"):
+            raise HTTPException(status_code=400, detail="Amostra de voz em falta")
+        base_url = LUMIN_OPENVOICE_URL
+        body = {"text": text, "audio_prompt_url": payload.voiceSampleUrl, "voice_profile": "natural"}
+        timeout = 75
+    elif voice == "kokoro":
+        base_url = LUMIN_KOKORO_URL
+        body = {"text": text}
+        timeout = 180
+    elif voice == "neural":
+        base_url = LUMIN_CHATTERBOX_URL
+        body = {"text": text, "language_id": "pt"}
+        timeout = 180
+    else:
+        raise HTTPException(status_code=400, detail="Voz desconhecida")
+
+    audio, headers = await asyncio.to_thread(_voice_preview_bytes, base_url, body, timeout)
+    sample_rate = headers.get("x-sample-rate", "24000")
+    return Response(
+        content=audio,
+        media_type=headers.get("content-type", "audio/pcm"),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Sample-Rate": sample_rate,
+            "X-Channels": headers.get("x-channels", "1"),
+            "X-Lumin-Voice": headers.get("x-lumin-voice", voice),
+        },
+    )
 
 
 def _avatar_json(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
