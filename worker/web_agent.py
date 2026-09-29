@@ -240,6 +240,7 @@ async def entrypoint(ctx: JobContext):
         tts_engine = OpenVoiceRemoteTTS(
             openvoice_url,
             audio_prompt_url=voice_sample_url,
+            fallback_url=chatterbox_url,
         )
         selected_engine = "openvoice-custom"
     elif wants_custom and chatterbox_url and voice_sample_url:
