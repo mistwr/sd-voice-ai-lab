@@ -19,6 +19,7 @@ from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOp
 from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
+from openvoice_tts import OpenVoiceRemoteTTS
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -229,24 +230,39 @@ async def entrypoint(ctx: JobContext):
     voice_source = _clean(profile.get("voiceSource"), 40).lower() if isinstance(profile, dict) else ""
     voice_sample_url = _clean(profile.get("voiceSampleUrl"), 4000) if isinstance(profile, dict) else ""
     chatterbox_url = os.getenv("CHATTERBOX_TTS_URL", "").strip()
-
+    openvoice_url = os.getenv("OPENVOICE_TTS_URL", "").strip()
     kokoro_url = os.getenv("KOKORO_TTS_URL", "").strip()
-    wants_chatterbox = voice_engine == "chatterbox" or voice_id in ("neural", "custom")
+    wants_custom = voice_id == "custom" or voice_source == "custom"
+    wants_chatterbox = voice_engine == "chatterbox" or voice_id == "neural"
     wants_kokoro = voice_engine == "kokoro" or voice_id == "kokoro"
 
-    if wants_kokoro and kokoro_url:
+    if wants_custom and openvoice_url and voice_sample_url:
+        tts_engine = OpenVoiceRemoteTTS(
+            openvoice_url,
+            audio_prompt_url=voice_sample_url,
+        )
+        selected_engine = "openvoice-custom"
+    elif wants_custom and chatterbox_url and voice_sample_url:
+        logger.warning("OpenVoice unavailable; using Chatterbox custom voice fallback")
+        tts_engine = ChatterboxRemoteTTS(
+            chatterbox_url,
+            audio_prompt_url=voice_sample_url,
+            language_id="pt",
+        )
+        selected_engine = "chatterbox-custom"
+    elif wants_kokoro and kokoro_url:
         tts_engine = KokoroRemoteTTS(kokoro_url)
         selected_engine = "kokoro-system"
     elif wants_chatterbox and chatterbox_url:
-        if voice_id == "custom" and not voice_sample_url:
-            logger.warning("custom voice requested without a signed sample URL; using system Chatterbox voice")
         tts_engine = ChatterboxRemoteTTS(
             chatterbox_url,
-            audio_prompt_url=voice_sample_url if voice_id == "custom" else "",
+            audio_prompt_url="",
             language_id="pt",
         )
-        selected_engine = "chatterbox-custom" if voice_id == "custom" and voice_sample_url else "chatterbox-system"
+        selected_engine = "chatterbox-system"
     else:
+        if wants_custom and not voice_sample_url:
+            logger.warning("custom voice requested without a signed sample URL; falling back to Piper")
         if wants_kokoro and not kokoro_url:
             logger.warning("Kokoro requested but KOKORO_TTS_URL is missing; falling back to Piper")
         if wants_chatterbox and not chatterbox_url:
