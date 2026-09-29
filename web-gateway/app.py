@@ -764,7 +764,7 @@ async def platform_voice_preview(
         timeout = 180
     elif voice.startswith("piper:"):
         voice_key = voice.split(":", 1)[1].strip()
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{3,120}", voice_key):
+        if not re.fullmatch(r"[\w.-]{3,120}", voice_key, flags=re.UNICODE):
             raise HTTPException(status_code=400, detail="Voz Piper inválida")
         base_url = LUMIN_PIPER_CATALOG_URL
         body = {"text": text, "voice": voice_key}
