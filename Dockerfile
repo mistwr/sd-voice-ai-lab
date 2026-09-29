@@ -16,6 +16,7 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2+cpu torchaudio==2.2.2+cpu
 RUN git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /opt/OpenVoice \
+    && python -c "from pathlib import Path; p=Path('/opt/OpenVoice/openvoice/api.py'); s=p.read_text(); s=s.replace('    def __init__(self, *args, **kwargs):\\n        super().__init__(*args, **kwargs)\\n\\n        if kwargs.get(\\'enable_watermark\\', True):', '    def __init__(self, *args, **kwargs):\\n        enable_watermark = kwargs.pop(\\'enable_watermark\\', True)\\n        super().__init__(*args, **kwargs)\\n\\n        if enable_watermark:'); p.write_text(s)" \
     && pip install --no-cache-dir -e /opt/OpenVoice --no-deps \
     && pip install --no-cache-dir \
        "numpy==1.23.5" "librosa==0.9.2" "soundfile==0.12.1" \
