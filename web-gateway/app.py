@@ -106,6 +106,10 @@ class PlatformCallRequest(BaseModel):
     agent: AgentProfile = Field(default_factory=AgentProfile)
 
 
+class WebTokenRequest(BaseModel):
+    agent: AgentProfile | None = None
+
+
 class VoicePreviewRequest(BaseModel):
     voice: str = Field(default="natural", max_length=40)
     text: str = Field(default="Olá. Sou o teu agente Lumin.", min_length=1, max_length=350)
@@ -470,14 +474,17 @@ async def health():
 
 
 @app.post("/token")
-async def create_token():
+async def create_token(payload: WebTokenRequest | None = None):
     if not (LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET):
         raise HTTPException(status_code=503, detail="LiveKit is not configured")
 
     room_name = f"lumin-web-{uuid.uuid4().hex[:12]}"
     identity = f"visitor-{uuid.uuid4().hex[:10]}"
 
-    metadata = json.dumps({"mode": "web", "source": "luminai.pt"})
+    dispatch_metadata: dict[str, Any] = {"mode": "web", "source": "luminai.pt"}
+    if payload and payload.agent:
+        dispatch_metadata["agentProfile"] = payload.agent.model_dump()
+    metadata = json.dumps(dispatch_metadata)
 
     token = (
         api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -504,7 +511,12 @@ async def create_token():
         .to_jwt()
     )
 
-    return {"serverUrl": LIVEKIT_URL, "token": token, "roomName": room_name}
+    return {
+        "serverUrl": LIVEKIT_URL,
+        "token": token,
+        "roomName": room_name,
+        "agent": dispatch_metadata.get("agentProfile", {}),
+    }
 
 
 @app.post("/api/call")
