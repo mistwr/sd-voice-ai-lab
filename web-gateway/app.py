@@ -43,6 +43,7 @@ LUMIN_AVATAR_URL = os.getenv("LUMIN_AVATAR_URL", "http://lumin-avatar.railway.in
 LUMIN_OPENVOICE_URL = os.getenv("LUMIN_OPENVOICE_URL", "http://lumin-openvoice.railway.internal:8080").rstrip("/")
 LUMIN_KOKORO_URL = os.getenv("LUMIN_KOKORO_URL", "http://lumin-kokoro-v2.railway.internal:8080").rstrip("/")
 LUMIN_CHATTERBOX_URL = os.getenv("LUMIN_CHATTERBOX_URL", "http://lumin-chatterbox-v2.railway.internal:8080").rstrip("/")
+LUMIN_PIPER_CATALOG_URL = os.getenv("LUMIN_PIPER_CATALOG_URL", "http://lumin-piper-catalog.railway.internal:8080").rstrip("/")
 
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
@@ -93,7 +94,7 @@ class AgentProfile(BaseModel):
     objections: str = Field(default="", max_length=1800)
     notes: str = Field(default="", max_length=2200)
     tone: str = Field(default="Natural, profissional e direto", max_length=300)
-    voice: str = Field(default="natural", max_length=40)
+    voice: str = Field(default="natural", max_length=120)
     voiceEngine: str = Field(default="piper", max_length=40)
     voiceSource: str = Field(default="system", max_length=40)
     voiceAssetPath: str = Field(default="", max_length=700)
@@ -112,7 +113,7 @@ class WebTokenRequest(BaseModel):
 
 
 class VoicePreviewRequest(BaseModel):
-    voice: str = Field(default="natural", max_length=40)
+    voice: str = Field(default="natural", max_length=120)
     text: str = Field(default="Olá. Sou o teu agente Lumin.", min_length=1, max_length=350)
     voiceSampleUrl: str = Field(default="", max_length=5000)
 
@@ -704,6 +705,36 @@ def _voice_preview_bytes(base_url: str, payload: dict[str, Any], timeout: int = 
         raise HTTPException(status_code=502, detail=f"Voice engine unavailable: {exc}")
 
 
+@app.get("/api/platform/voice-catalog")
+async def platform_voice_catalog(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    language: str = "",
+    q: str = "",
+    quality: str = "",
+    limit: int = 500,
+):
+    _require_platform_session(authorization)
+    params = urllib.parse.urlencode({
+        "language": str(language or "")[:20],
+        "q": str(q or "")[:80],
+        "quality": str(quality or "")[:20],
+        "limit": max(1, min(int(limit or 500), 1000)),
+    })
+    request = urllib.request.Request(
+        f"{LUMIN_PIPER_CATALOG_URL}/catalog?{params}",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail[:1200] or "Voice catalog error")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Voice catalog unavailable: {exc}")
+
+
 @app.post("/api/platform/voice-preview")
 async def platform_voice_preview(
     payload: VoicePreviewRequest,
@@ -731,6 +762,13 @@ async def platform_voice_preview(
         base_url = LUMIN_CHATTERBOX_URL
         body = {"text": text, "language_id": "pt"}
         timeout = 180
+    elif voice.startswith("piper:"):
+        voice_key = voice.split(":", 1)[1].strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{3,120}", voice_key):
+            raise HTTPException(status_code=400, detail="Voz Piper inválida")
+        base_url = LUMIN_PIPER_CATALOG_URL
+        body = {"text": text, "voice": voice_key}
+        timeout = 120
     else:
         raise HTTPException(status_code=400, detail="Voz desconhecida")
 
