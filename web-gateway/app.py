@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from livekit import api
 from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTrunkRequest
@@ -37,6 +37,7 @@ LUMIN_AGENT_NAME = os.getenv("LUMIN_AGENT_NAME", "lumin-web")
 LUMIN_PLATFORM_PASSWORD_HASH = os.getenv("LUMIN_PLATFORM_PASSWORD_HASH", "")
 LUMIN_PLATFORM_SESSION_SECRET = os.getenv("LUMIN_PLATFORM_SESSION_SECRET", "")
 LUMIN_PLATFORM_SESSION_TTL = 60 * 60 * 8
+LUMIN_AVATAR_URL = os.getenv("LUMIN_AVATAR_URL", "http://lumin-avatar.railway.internal:8080").rstrip("/")
 
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
@@ -98,6 +99,14 @@ class PlatformCallRequest(BaseModel):
     phone: str = Field(..., description="Destination in E.164")
     name: str = Field(default="Cliente", max_length=100)
     agent: AgentProfile = Field(default_factory=AgentProfile)
+
+
+class AvatarRenderRequest(BaseModel):
+    imageUrl: str = Field(..., min_length=12, max_length=6000)
+    audioUrl: str = Field(..., min_length=12, max_length=6000)
+    preprocess: str = Field(default="crop", max_length=20)
+    still: bool = True
+    size: int = Field(default=512, ge=256, le=512)
 
 
 class SDDialerCallRequest(BaseModel):
@@ -650,6 +659,86 @@ async def platform_call_status(
     if not state:
         raise HTTPException(status_code=404, detail="Unknown call ID")
     return state
+
+
+def _avatar_json(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    url = f"{LUMIN_AVATAR_URL}{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read()
+            return json.loads(raw.decode("utf-8")) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail[:1200] or "Avatar engine error")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Avatar engine unavailable: {exc}")
+
+
+@app.post("/api/platform/avatar")
+async def platform_avatar_create(
+    payload: AvatarRenderRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
+    return await asyncio.to_thread(
+        _avatar_json,
+        "POST",
+        "/jobs",
+        {
+            "image_url": payload.imageUrl,
+            "audio_url": payload.audioUrl,
+            "preprocess": payload.preprocess,
+            "still": payload.still,
+            "size": payload.size,
+        },
+    )
+
+
+@app.get("/api/platform/avatar/{job_id}")
+async def platform_avatar_status(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid avatar job ID")
+    return await asyncio.to_thread(_avatar_json, "GET", f"/jobs/{job_id}", None)
+
+
+@app.get("/api/platform/avatar/{job_id}/video")
+async def platform_avatar_video(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    _require_platform_session(authorization)
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid avatar job ID")
+
+    def fetch_video() -> bytes:
+        request = urllib.request.Request(f"{LUMIN_AVATAR_URL}/jobs/{job_id}/video", method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise HTTPException(status_code=exc.code, detail=detail[:1200] or "Avatar video unavailable")
+
+    video = await asyncio.to_thread(fetch_video)
+    return Response(
+        content=video,
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f'inline; filename="lumin-avatar-{job_id}.mp4"',
+        },
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
