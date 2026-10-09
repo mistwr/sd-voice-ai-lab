@@ -3,7 +3,7 @@ LUMIN Voice Agent
 Stable production voice path for luminai.pt and outbound SIP calls.
 
 Pipeline:
-WebRTC/SIP -> Deepgram STT -> GPT-5.6 Luna -> Piper PT-PT -> WebRTC/SIP
+WebRTC/SIP -> Deepgram STT -> GPT-5.6 Luna -> selectable neural PT-PT / Piper -> WebRTC/SIP
 """
 from __future__ import annotations
 
@@ -241,11 +241,22 @@ async def entrypoint(ctx: JobContext):
     piper_catalog_url = os.getenv("PIPER_CATALOG_TTS_URL", "").strip()
     wants_custom = voice_id == "custom" or voice_source == "custom"
     wants_chatterbox = voice_engine == "chatterbox" or voice_id == "neural"
+    wants_neural_ptpt = voice_engine in {"xai", "neural-ptpt"}
     wants_kokoro = voice_engine == "kokoro" or voice_id == "kokoro"
     wants_catalog = voice_engine == "piper-catalog" or voice_id.startswith("piper:")
     catalog_key = voice_id.split(":", 1)[1] if voice_id.startswith("piper:") else voice_id
 
-    if wants_catalog and piper_catalog_url and catalog_key:
+    if wants_neural_ptpt:
+        # LiveKit Inference exposes pt-PT directly; no additional third-party key.
+        # This is deliberately opt-in: neural generation is billed through LiveKit.
+        voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
+        tts_engine = inference.TTS(
+            model="xai/tts-1",
+            voice=voices.get(voice_id, "rex"),
+            language="pt-PT",
+        )
+        selected_engine = "xai-neural-ptpt"
+    elif wants_catalog and piper_catalog_url and catalog_key:
         tts_engine = PiperCatalogRemoteTTS(
             piper_catalog_url,
             voice_key=catalog_key,
