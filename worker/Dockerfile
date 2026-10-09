@@ -3,7 +3,7 @@
 # Deploy recomendado: Railway (mesmo padrão do Lumin AI) ou qualquer host
 # que mantenha um processo Python vivo continuamente.
 
-FROM python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 
