@@ -260,7 +260,7 @@ async def synthesize(payload: SynthesisRequest):
         noise_scale=0.38,
         noise_w_scale=0.43,
         normalize_audio=True,
-        volume=0.85,
+        volume=1.0,
     )
 
     def run() -> bytes:
