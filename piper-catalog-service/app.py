@@ -246,7 +246,7 @@ async def _load_voice(key: str) -> tuple[PiperVoice, int]:
 
 def _clean_text(text: str) -> str:
     text = re.sub(r"[*_#\x60~]+", " ", text)
-    text = text.replace("—", ", ").replace("–", ", ")
+    text = text.replace("—", ", ").replace("–", ", ")\n    # Spoken Portuguese forms for common abbreviations, without changing model selection.\n    text = re.sub(r"\\bCRM\\b", "C R M", text)\n    text = re.sub(r"\\bFTTH\\b", "F T T H", text)\n    text = re.sub(r"\\bSMS\\b", "S M S", text)\n    text = re.sub(r"\\bAPI\\b", "A P I", text)\n    text = re.sub(r"(\\d+(?:[,.]\\d{1,2})?)\\s*€\\s*/\\s*mês", r"\\1 euros por mês", text, flags=re.IGNORECASE)\n    text = re.sub(r"(\\d+(?:[,.]\\d{1,2})?)\\s*€", r"\\1 euros", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
