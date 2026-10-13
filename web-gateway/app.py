@@ -127,7 +127,10 @@ class AvatarRenderRequest(BaseModel):
 
 
 class SDDialerCallRequest(BaseModel):
-    lead_id: str = Field(..., min_length=8, max_length=80)
+    lead_id: str | None = Field(default=None, min_length=8, max_length=80)
+    phone: str | None = Field(default=None, min_length=3, max_length=40)
+    name: str | None = Field(default=None, max_length=120)
+    consent_confirmed: bool = False
     agent_id: str = Field(default="lumin-telecom", max_length=80)
     agent: AgentProfile | None = None
 
@@ -583,27 +586,40 @@ async def sd_dialer_call(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     user_id, profile, token = await _require_sd_context(authorization)
+    is_manual = bool(payload.phone)
+    has_lead = bool(payload.lead_id)
+    if is_manual == has_lead:
+        raise HTTPException(status_code=400, detail="Escolhe uma lead ou introduz um número manual")
 
-    leads = await _sd_request_json(
-        "/rest/v1/leads",
-        token,
-        {
-            "id": f"eq.{payload.lead_id}",
-            "select": "id,nome,telefone,status,assigned_to,company_id",
-            "limit": "1",
-        },
-    )
-    lead = leads[0] if isinstance(leads, list) and leads else None
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead nao encontrada")
+    lead = None
+    lead_id: str | None = None
+    if has_lead:
+        leads = await _sd_request_json(
+            "/rest/v1/rpc/get_voice_lead_for_call",
+            token,
+            {"p_lead_id": str(payload.lead_id)},
+        )
+        lead = leads[0] if isinstance(leads, list) and leads else None
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead nao encontrada ou fora da empresa")
+        if str(lead.get("company_id") or "") != str(profile.get("company_id") or ""):
+            raise HTTPException(status_code=403, detail="Lead pertence a outra empresa")
+        lead_id = str(lead.get("id") or "")
+    else:
+        if not payload.consent_confirmed:
+            raise HTTPException(status_code=400, detail="Confirma que tens autorizacao para contactar este numero")
+        matches = await _sd_request_json(
+            "/rest/v1/rpc/find_voice_lead_by_phone",
+            token,
+            {"p_phone": payload.phone or ""},
+        )
+        lead = matches[0] if isinstance(matches, list) and matches else None
+        if lead and str(lead.get("company_id") or "") != str(profile.get("company_id") or ""):
+            raise HTTPException(status_code=403, detail="Lead pertence a outra empresa")
+        if lead:
+            lead_id = str(lead.get("id") or "")
 
-    if str(lead.get("company_id") or "") != str(profile.get("company_id") or ""):
-        raise HTTPException(status_code=403, detail="Lead pertence a outra empresa")
-
-    if profile.get("role") == "parceiro" and str(lead.get("assigned_to") or "") != user_id:
-        raise HTTPException(status_code=403, detail="Lead nao atribuida a este parceiro")
-
-    if lead.get("status") in {
+    if lead and lead.get("status") in {
         "nao_interessado",
         "desligado",
         "numero_errado",
@@ -627,28 +643,35 @@ async def sd_dialer_call(
         else "SD Dialer"
     )
 
-    phone = _normalise_sd_phone(str(lead.get("telefone") or ""))
+    phone = _normalise_sd_phone(str(payload.phone if is_manual else (lead or {}).get("telefone") or ""))
+    lead_name = (
+        str((lead or {}).get("nome") or payload.name or "Contacto manual")
+        if is_manual
+        else str((lead or {}).get("nome") or "Cliente")
+    )
     agent_profile = _sd_agent_profile(payload.agent_id, company_name)
     if payload.agent is not None:
         agent_profile = _apply_sd_agent_overrides(agent_profile, payload.agent)
 
     state = _queue_call(
         phone,
-        str(lead.get("nome") or "Cliente"),
+        lead_name,
         agent_profile,
-        source="sd-dialer",
+        source="sd-dialer-manual" if is_manual else "sd-dialer",
     )
     state["sdUserId"] = user_id
-    state["leadId"] = str(lead.get("id") or "")
+    if lead_id:
+        state["leadId"] = lead_id
+    if is_manual:
+        state["manualNumber"] = True
+        state["manualConsentConfirmed"] = True
     return {
         "ok": True,
         "callId": state["callId"],
         "status": state["status"],
         "roomName": state["roomName"],
-        "lead": {
-            "id": lead.get("id"),
-            "nome": lead.get("nome"),
-        },
+        "manual": is_manual,
+        "lead": {"id": lead_id, "nome": lead_name} if lead_id else None,
     }
 
 
