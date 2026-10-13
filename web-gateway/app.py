@@ -129,6 +129,34 @@ class AvatarRenderRequest(BaseModel):
 class SDDialerCallRequest(BaseModel):
     lead_id: str = Field(..., min_length=8, max_length=80)
     agent_id: str = Field(default="lumin-telecom", max_length=80)
+    agent: AgentProfile | None = None
+
+
+def _apply_sd_agent_overrides(profile: dict[str, Any], overrides: AgentProfile) -> dict[str, Any]:
+    values = overrides.model_dump(exclude_unset=True)
+    for field in ("name", "company", "objective", "product", "opening"):
+        if field in values:
+            profile[field] = str(values[field] or "").strip()
+
+    voice = values.get("voice")
+    if voice is not None:
+        if voice not in {"natural", "clear", "commercial"}:
+            raise HTTPException(status_code=400, detail="Estilo de voz inválido")
+        tones = {
+            "natural": "Natural, profissional e direto.",
+            "clear": "Clara, calma e objetiva.",
+            "commercial": "Comercial, enérgica e cordial.",
+        }
+        profile["voice"] = voice
+        profile["tone"] = f"[VOICE:{voice}] {tones[voice]}"
+
+    voice_engine = values.get("voiceEngine")
+    if voice_engine is not None:
+        if voice_engine not in {"piper", "xai"}:
+            raise HTTPException(status_code=400, detail="Tecnologia de voz inválida")
+        profile["voiceEngine"] = voice_engine
+
+    return profile
 
 
 def _require_call_key(x_lumin_key: str | None) -> None:
@@ -601,6 +629,8 @@ async def sd_dialer_call(
 
     phone = _normalise_sd_phone(str(lead.get("telefone") or ""))
     agent_profile = _sd_agent_profile(payload.agent_id, company_name)
+    if payload.agent is not None:
+        agent_profile = _apply_sd_agent_overrides(agent_profile, payload.agent)
 
     state = _queue_call(
         phone,
