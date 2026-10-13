@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from livekit import api
-from livekit.agents import inference
+from livekit.agents import inference, utils
 from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTrunkRequest
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 
@@ -794,17 +794,19 @@ async def sd_dialer_voice_preview(
         )
         pcm_parts: list[bytes] = []
         try:
-            async with tts_engine.synthesize(text) as stream:
-                async for item in stream:
-                    frame = item.frame
-                    sample_rate = frame.sample_rate
-                    channels = frame.num_channels
-                    pcm_parts.append(bytes(frame.data))
+            async with utils.http_context.open():
+                try:
+                    async with tts_engine.synthesize(text) as stream:
+                        async for item in stream:
+                            frame = item.frame
+                            sample_rate = frame.sample_rate
+                            channels = frame.num_channels
+                            pcm_parts.append(bytes(frame.data))
+                finally:
+                    await tts_engine.aclose()
         except Exception:
             logger.exception("SD Dialer voice preview failed")
             raise HTTPException(status_code=502, detail="Não foi possível gerar a amostra de voz.")
-        finally:
-            await tts_engine.aclose()
         audio = b"".join(pcm_parts)
     else:
         if not LUMIN_PIPER_CATALOG_URL:
