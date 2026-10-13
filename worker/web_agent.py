@@ -21,6 +21,7 @@ from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
 from openvoice_tts import OpenVoiceRemoteTTS
 from piper_catalog_tts import PiperCatalogRemoteTTS
+from lead_capture import LeadCapture, lead_capture_instructions
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -198,10 +199,18 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
 
 
 class LuminAgent(Agent):
-    def __init__(self, profile: dict[str, Any] | None = None, customer_name: str = "") -> None:
+    def __init__(
+        self,
+        profile: dict[str, Any] | None = None,
+        customer_name: str = "",
+        capture_phone_lead: bool = False,
+    ) -> None:
         self._profile = profile or {}
         self._customer_name = customer_name
-        super().__init__(instructions=build_instructions(self._profile))
+        instructions = build_instructions(self._profile)
+        if capture_phone_lead:
+            instructions += lead_capture_instructions()
+        super().__init__(instructions=instructions)
 
     async def on_enter(self):
         await self.session.say(
@@ -219,6 +228,7 @@ async def entrypoint(ctx: JobContext):
 
     profile = metadata.get("agentProfile") or {}
     customer_name = _clean(metadata.get("name"), 100)
+    lead_capture = LeadCapture.from_job(metadata)
 
     logger.info(
         "voice session started",
@@ -374,19 +384,27 @@ async def entrypoint(ctx: JobContext):
     def _log_conversation(ev):
         item = ev.item
         text_value = getattr(item, "text_content", None) or ""
+        role = getattr(item, "role", "unknown")
         if text_value:
+            if lead_capture is not None:
+                lead_capture.observe(role, text_value)
+            # Keep operational diagnostics without retaining customer transcripts in logs.
             logger.info(
-                "conversation",
-                extra={
-                    "role": getattr(item, "role", "unknown"),
-                    "text": text_value[:1000],
-                },
+                "conversation_item",
+                extra={"role": role, "text_length": len(text_value)},
             )
+
+    if lead_capture is not None:
+        async def _sync_lead_after_call() -> None:
+            await lead_capture.register()
+
+        ctx.add_shutdown_callback(_sync_lead_after_call)
 
     await session.start(
         agent=LuminAgent(
             profile if isinstance(profile, dict) else {},
             customer_name=customer_name,
+            capture_phone_lead=lead_capture is not None,
         ),
         room=ctx.room,
     )
