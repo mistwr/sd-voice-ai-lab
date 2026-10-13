@@ -203,3 +203,5 @@ $fn$;
 
 revoke all on function public.lumin_voice_register_lead(text, text, text, text, boolean, timestamptz) from public, anon, authenticated;
 grant execute on function public.lumin_voice_register_lead(text, text, text, text, boolean, timestamptz) to anon;
+
+notify pgrst, 'reload schema';

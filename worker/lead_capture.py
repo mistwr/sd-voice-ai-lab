@@ -66,7 +66,7 @@ def _name_from_answer(value: str) -> str:
 def _asks_for_name(text: str) -> bool:
     folded = _fold(text)
     return bool(re.search(
-        r"\b(?:qual (?:e|é) o seu nome|como se chama|diga-me o seu nome|pode dizer o seu nome|qual e o seu nome completo)\b",
+        r"\b(?:qual (?:e|é) o seu nome|qual o seu nome|como (?:e que )?se chama|diga-me o seu nome|pode dizer o seu nome|qual e o seu nome completo)\b",
         folded,
     ))
 
@@ -84,6 +84,8 @@ def _is_opt_out(text: str) -> bool:
     folded = _fold(text)
     patterns = (
         r"\bnao me lig(?:ue|uem|ues)\b",
+        r"\bnao me telefon(?:e|em)\b",
+        r"\bnao quero que (?:me )?voltem a ligar\b",
         r"\bnao me contact(?:e|em)\b",
         r"\bnao quero (?:mais )?(?:chamadas?|contactos?)\b",
         r"\bnao voltem a ligar\b",
