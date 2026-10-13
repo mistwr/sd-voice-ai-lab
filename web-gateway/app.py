@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from livekit import api
+from livekit.agents import inference
 from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTrunkRequest
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 
@@ -133,6 +134,12 @@ class SDDialerCallRequest(BaseModel):
     consent_confirmed: bool = False
     agent_id: str = Field(default="lumin-telecom", max_length=80)
     agent: AgentProfile | None = None
+
+
+class SDDialerVoicePreviewRequest(BaseModel):
+    voice: str = Field(default="natural", min_length=3, max_length=20)
+    voiceEngine: str = Field(default="xai", min_length=3, max_length=20)
+    text: str = Field(..., min_length=1, max_length=800)
 
 
 def _apply_sd_agent_overrides(profile: dict[str, Any], overrides: AgentProfile) -> dict[str, Any]:
@@ -756,6 +763,90 @@ def _voice_preview_bytes(base_url: str, payload: dict[str, Any], timeout: int = 
         raise HTTPException(status_code=exc.code, detail=detail[:1200] or "Voice preview error")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Voice engine unavailable: {exc}")
+
+
+
+@app.post("/api/sd-dialer/voice-preview")
+async def sd_dialer_voice_preview(
+    payload: SDDialerVoicePreviewRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    await _require_sd_context(authorization)
+    voice = payload.voice.strip().lower()
+    engine = payload.voiceEngine.strip().lower()
+    text = payload.text.strip()
+
+    if voice not in {"natural", "clear", "commercial"}:
+        raise HTTPException(status_code=400, detail="Estilo de voz inválido")
+    if engine not in {"piper", "xai"}:
+        raise HTTPException(status_code=400, detail="Tecnologia de voz inválida")
+
+    sample_rate = 24000
+    channels = 1
+    media_type = "audio/pcm"
+
+    if engine == "xai":
+        voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
+        tts_engine = inference.TTS(
+            model="xai/tts-1",
+            voice=voices[voice],
+            language="pt-PT",
+        )
+        pcm_parts: list[bytes] = []
+        try:
+            async with tts_engine.synthesize(text) as stream:
+                async for item in stream:
+                    frame = item.frame
+                    sample_rate = frame.sample_rate
+                    channels = frame.num_channels
+                    pcm_parts.append(bytes(frame.data))
+        except Exception:
+            logger.exception("SD Dialer voice preview failed")
+            raise HTTPException(status_code=502, detail="Não foi possível gerar a amostra de voz.")
+        finally:
+            await tts_engine.aclose()
+        audio = b"".join(pcm_parts)
+    else:
+        if not LUMIN_PIPER_CATALOG_URL:
+            raise HTTPException(status_code=503, detail="O motor Piper não está configurado.")
+        profiles = {
+            "natural": {"length_scale": 1.08, "noise_scale": 0.38, "noise_w_scale": 0.43, "volume": 1.00},
+            "clear": {"length_scale": 1.11, "noise_scale": 0.30, "noise_w_scale": 0.36, "volume": 1.01},
+            "commercial": {"length_scale": 1.07, "noise_scale": 0.40, "noise_w_scale": 0.45, "volume": 1.02},
+        }
+        audio, headers = await asyncio.to_thread(
+            _voice_preview_bytes,
+            LUMIN_PIPER_CATALOG_URL,
+            {"text": text, "voice": "pt_PT-tugao-medium", **profiles[voice]},
+            120,
+        )
+        try:
+            sample_rate = int(headers.get("x-sample-rate", "24000"))
+        except Exception:
+            sample_rate = 24000
+        try:
+            channels = max(1, int(headers.get("x-channels", "1")))
+        except Exception:
+            channels = 1
+        media_type = headers.get("content-type", "audio/pcm")
+
+    if not audio:
+        raise HTTPException(status_code=502, detail="O motor de voz devolveu uma amostra vazia.")
+    if "audio/pcm" in media_type:
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio)
+        audio = wav_buffer.getvalue()
+        media_type = "audio/wav"
+
+    return Response(
+        content=audio,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/platform/voice-catalog")

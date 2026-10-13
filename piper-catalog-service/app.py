@@ -43,6 +43,9 @@ class SynthesisRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=1200)
     voice: str = Field(..., min_length=3, max_length=120)
     length_scale: float = Field(default=1.03, ge=0.72, le=1.55)
+    noise_scale: float = Field(default=0.38, ge=0.0, le=1.0)
+    noise_w_scale: float = Field(default=0.43, ge=0.0, le=1.0)
+    volume: float = Field(default=1.0, ge=0.1, le=2.0)
 
 
 def _safe_key(value: str) -> str:
@@ -246,7 +249,14 @@ async def _load_voice(key: str) -> tuple[PiperVoice, int]:
 
 def _clean_text(text: str) -> str:
     text = re.sub(r"[*_#\x60~]+", " ", text)
-    text = text.replace("—", ", ").replace("–", ", ")\n    # Spoken Portuguese forms for common abbreviations, without changing model selection.\n    text = re.sub(r"\\bCRM\\b", "C R M", text)\n    text = re.sub(r"\\bFTTH\\b", "F T T H", text)\n    text = re.sub(r"\\bSMS\\b", "S M S", text)\n    text = re.sub(r"\\bAPI\\b", "A P I", text)\n    text = re.sub(r"(\\d+(?:[,.]\\d{1,2})?)\\s*€\\s*/\\s*mês", r"\\1 euros por mês", text, flags=re.IGNORECASE)\n    text = re.sub(r"(\\d+(?:[,.]\\d{1,2})?)\\s*€", r"\\1 euros", text)
+    text = text.replace("—", ", ").replace("–", ", ")
+    # Spoken Portuguese forms for common abbreviations, without changing model selection.
+    text = re.sub(r"\bCRM\b", "C R M", text)
+    text = re.sub(r"\bFTTH\b", "F T T H", text)
+    text = re.sub(r"\bSMS\b", "S M S", text)
+    text = re.sub(r"\bAPI\b", "A P I", text)
+    text = re.sub(r"(\d+(?:[,.]\d{1,2})?)\s*€\s*/\s*mês", r"\1 euros por mês", text, flags=re.IGNORECASE)
+    text = re.sub(r"(\d+(?:[,.]\d{1,2})?)\s*€", r"\1 euros", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -257,10 +267,10 @@ async def synthesize(payload: SynthesisRequest):
     text = _clean_text(payload.text)
     config = SynthesisConfig(
         length_scale=payload.length_scale,
-        noise_scale=0.38,
-        noise_w_scale=0.43,
+        noise_scale=payload.noise_scale,
+        noise_w_scale=payload.noise_w_scale,
         normalize_audio=True,
-        volume=1.0,
+        volume=payload.volume,
     )
 
     def run() -> bytes:
