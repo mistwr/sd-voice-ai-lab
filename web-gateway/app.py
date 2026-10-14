@@ -48,6 +48,9 @@ LUMIN_PIPER_CATALOG_URL = os.getenv("LUMIN_PIPER_CATALOG_URL", "http://lumin-pip
 
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
+SD_DIALER_APP_URL = os.getenv(
+    "SD_DIALER_APP_URL", "https://sd-dialer-2p.vercel.app"
+).rstrip("/")
 
 logger = logging.getLogger("lumin-voice-gateway")
 logging.basicConfig(level=logging.INFO)
@@ -131,6 +134,7 @@ class SDDialerCallRequest(BaseModel):
     lead_id: str | None = Field(default=None, min_length=8, max_length=80)
     phone: str | None = Field(default=None, min_length=3, max_length=40)
     name: str | None = Field(default=None, max_length=120)
+    caller_id: str | None = Field(default=None, min_length=3, max_length=40)
     consent_confirmed: bool = False
     agent_id: str = Field(default="lumin-telecom", max_length=80)
     agent: AgentProfile | None = None
@@ -312,6 +316,44 @@ async def _require_sd_context(authorization: str | None) -> tuple[str, dict[str,
     return user_id, profile, token
 
 
+async def _authorize_sd_caller_id(phone: str, token: str) -> None:
+    url = f"{SD_DIALER_APP_URL}/api/reborn/caller-ids/authorize"
+
+    def do_request():
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"phone_number": phone}).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        result = await asyncio.to_thread(do_request)
+    except urllib.error.HTTPError as exc:
+        detail = "Caller ID não está verificado na conta Twilio"
+        try:
+            body = json.loads(exc.read().decode("utf-8"))
+            detail = str(body.get("error") or detail)
+        except Exception:
+            pass
+        if exc.code in (401, 403, 404):
+            raise HTTPException(status_code=403, detail=detail)
+        logger.warning("Caller ID authorization failed: %s", exc.code)
+        raise HTTPException(status_code=502, detail="Não foi possível validar o Caller ID")
+    except Exception as exc:
+        logger.warning("Caller ID authorization request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Não foi possível validar o Caller ID")
+
+    if not result.get("verified"):
+        raise HTTPException(status_code=403, detail="Caller ID não está verificado na conta Twilio")
+
+
 def _sd_agent_profile(agent_id: str, company_name: str) -> dict[str, Any]:
     company = company_name or "SD Dialer"
 
@@ -394,6 +436,7 @@ async def _run_outbound_call(
     phone: str,
     name: str,
     agent_profile: dict[str, Any] | None = None,
+    caller_id: str | None = None,
 ) -> None:
     state = _CALLS[call_id]
     room_name = state["roomName"]
@@ -417,6 +460,7 @@ async def _run_outbound_call(
                 "callId": call_id,
                 "phone": phone,
                 "name": name,
+                "callerId": caller_id or LUMIN_CALLER_ID,
             }
             if agent_profile:
                 common_metadata["agentProfile"] = agent_profile
@@ -431,8 +475,9 @@ async def _run_outbound_call(
                 "wait_until_answered": True,
             }
 
-            if LUMIN_CALLER_ID:
-                req_kwargs["sip_number"] = LUMIN_CALLER_ID
+            outbound_caller_id = caller_id or LUMIN_CALLER_ID
+            if outbound_caller_id:
+                req_kwargs["sip_number"] = outbound_caller_id
 
             sip_participant = await lkapi.sip.create_sip_participant(
                 CreateSIPParticipantRequest(**req_kwargs),
@@ -474,6 +519,7 @@ def _queue_call(
     name: str,
     agent_profile: dict[str, Any] | None = None,
     source: str = "lumin-call-api",
+    caller_id: str | None = None,
 ):
     global _LAST_CALL_AT
 
@@ -493,8 +539,9 @@ def _queue_call(
         "createdAt": time.time(),
         "agent": agent_profile or {},
         "source": source,
+        "callerId": caller_id or LUMIN_CALLER_ID,
     }
-    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile))
+    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile, caller_id))
     return _CALLS[call_id]
 
 
@@ -651,6 +698,9 @@ async def sd_dialer_call(
     )
 
     phone = _normalise_sd_phone(str(payload.phone if is_manual else (lead or {}).get("telefone") or ""))
+    caller_id = _normalise_sd_phone(payload.caller_id) if payload.caller_id else None
+    if caller_id:
+        await _authorize_sd_caller_id(caller_id, token)
     lead_name = (
         str((lead or {}).get("nome") or payload.name or "Contacto manual")
         if is_manual
@@ -665,6 +715,7 @@ async def sd_dialer_call(
         lead_name,
         agent_profile,
         source="sd-dialer-manual" if is_manual else "sd-dialer",
+        caller_id=caller_id,
     )
     state["sdUserId"] = user_id
     if lead_id:
@@ -677,6 +728,7 @@ async def sd_dialer_call(
         "callId": state["callId"],
         "status": state["status"],
         "roomName": state["roomName"],
+        "callerId": state.get("callerId"),
         "manual": is_manual,
         "lead": {"id": lead_id, "nome": lead_name} if lead_id else None,
     }
@@ -700,6 +752,7 @@ async def sd_dialer_call_status(
         "callId": state.get("callId"),
         "status": state.get("status"),
         "roomName": state.get("roomName"),
+        "callerId": state.get("callerId"),
         "leadId": state.get("leadId"),
         "createdAt": state.get("createdAt"),
         "error": state.get("error"),
