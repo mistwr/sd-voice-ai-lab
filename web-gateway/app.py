@@ -70,6 +70,7 @@ app.add_middleware(
 )
 
 _CALLS: dict[str, dict[str, Any]] = {}
+_CALL_MONITORS: set[asyncio.Task[Any]] = set()
 _LAST_CALL_AT = 0.0
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
@@ -461,12 +462,60 @@ async def _run_outbound_call(
 
             state["dispatchId"] = getattr(dispatch, "id", "")
             state["status"] = "connected"
+            state["connectedAt"] = time.time()
             logger.info("call %s connected", call_id)
+            monitor = asyncio.create_task(_monitor_call_end(call_id, room_name))
+            _CALL_MONITORS.add(monitor)
+            monitor.add_done_callback(_CALL_MONITORS.discard)
 
     except Exception as exc:
         state["status"] = "failed"
         state["error"] = str(exc)[:500]
+        state["endedAt"] = time.time()
+        state["durationSeconds"] = 0
         logger.exception("call %s failed: %s", call_id, exc)
+
+
+async def _monitor_call_end(call_id: str, room_name: str) -> None:
+    callee_identity = f"callee-{call_id}"
+    missing_checks = 0
+
+    while True:
+        await asyncio.sleep(3)
+        state = _CALLS.get(call_id)
+        if not state or state.get("status") != "connected":
+            return
+
+        try:
+            async with api.LiveKitAPI() as lkapi:
+                response = await lkapi.room.list_participants(
+                    api.ListParticipantsRequest(room=room_name)
+                )
+            participants = getattr(response, "participants", []) or []
+            callee_present = any(
+                getattr(participant, "identity", "") == callee_identity
+                for participant in participants
+            )
+        except Exception as exc:
+            logger.warning("call %s end check failed: %s", call_id, str(exc)[:200])
+            continue
+
+        if callee_present:
+            missing_checks = 0
+            continue
+
+        missing_checks += 1
+        if missing_checks < 2:
+            continue
+
+        ended_at = time.time()
+        connected_at = float(state.get("connectedAt") or ended_at)
+        state["status"] = "ended"
+        state["endedAt"] = ended_at
+        state["durationSeconds"] = max(0, int(ended_at - connected_at))
+        state["endReason"] = "callee_disconnected"
+        logger.info("call %s ended after callee disconnected", call_id)
+        return
 
 
 def _queue_call(
