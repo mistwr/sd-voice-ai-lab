@@ -188,13 +188,24 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     opening = _clean(profile.get("opening"), 800)
     agent_name = _clean(profile.get("name"), 80) or "Lumin"
     company = _clean(profile.get("company"), 120)
+    customer_name = _clean(customer_name, 100)
+    name_part = f", {customer_name}" if customer_name and customer_name.casefold() != "cliente" else ""
+    company_key = re.sub(r"[^a-z0-9]", "", company.casefold())
+
+    if "compara" in company_key:
+        return (
+            f"Boa tarde{name_part}. Sou o {agent_name}, assistente virtual de IA da Compara+. "
+            "Estou a ligar para confirmar a sua operadora e a data de fim da fidelização. "
+            "Qual é a sua operadora atual?"
+        )
 
     if opening:
-        # Keep disclosure even when the user supplied their own opening.
-        return f"Olá. Sou o {agent_name}, assistente virtual de IA. {opening}"
+        opening = re.sub(r"\[(?:nome|name)\]", customer_name, opening, flags=re.IGNORECASE)
+        opening = re.sub(r"\s{2,}", " ", opening).strip()
+        who = f" da {company}" if company else ""
+        return f"Olá. Sou o {agent_name}, assistente virtual de IA{who}. {opening}"
 
     who = f" da {company}" if company else ""
-    name_part = f", {customer_name}" if customer_name else ""
     return (
         f"Olá{name_part}. Sou o {agent_name}, assistente virtual de IA{who}. "
         "Posso falar consigo por um momento?"
