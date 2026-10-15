@@ -91,8 +91,38 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
-def build_instructions(profile: dict[str, Any] | None = None) -> str:
+# Restore the full campaign script for the short v1-v4 profiles already saved
+# in browsers. Newer profiles retain subsequent edits made by the customer.
+COMPARA_SCRIPT_VERSION = 5
+COMPARA_RESTORED_SCRIPT = {
+    "description": "Ricardo Salgado é o assistente virtual de IA da Compara + para qualificar contactos sobre telecomunicações residenciais. Fala português de Portugal, é cordial e conciso, faz uma pergunta de cada vez e respeita recusas. Usa apenas informação confirmada na campanha.",
+    "objective": "Qualificar contactos para comparação de telecomunicações: confirmar titularidade, operadora, satisfação, fidelização, tecnologia, localidade e mensalidade; confirmar interesse e registar preferência de contacto por um consultor humano quando aplicável. Seguir o guião e terminar perante uma condição de paragem.",
+    "opening": "Boa tarde! Estou a falar com o/a Sr./Sra. [nome]? Sou o Ricardo Salgado, assistente virtual de IA da Compara +. É consigo que devo falar sobre os serviços de internet e televisão da sua casa? Queria fazer-lhe algumas perguntas rápidas para perceber se vale a pena comparar as opções disponíveis.",
+    "product": "Qualificação para comparar serviços residenciais de internet e televisão. Registar operadora (NOS, MEO, Vodafone, DIGI, NOWO, UZO, WOO, nenhuma ou desconhecida), satisfação e problema (velocidade, falhas, preço, Wi-Fi ou outro), tecnologia (fibra, ADSL, cabo, satélite ou desconhecida), localidade/concelho e mensalidade ou desconhecida. Se só usar telemóvel e não tiver interesse em internet fixa, agradecer e terminar.",
+    "offer": "Propor análise das opções disponíveis para a morada, incluindo NOS, MEO e Vodafone quando aplicável. A comparação não obriga a mudar. Não prometer poupança, cobertura, preços ou disponibilidade. Confirmar interesse e, se quiser avançar, registar preferência de contacto por um consultor humano. Não fechar contrato nem afirmar que uma marca é a melhor sem confirmação.",
+    "objections": "NÃO INTERESSADO: agradecer e terminar, sem insistir. NÃO QUERO MUDAR: explicar uma vez que comparar não obriga a mudar; perguntar se quer conhecer as opções e, se voltar a recusar, terminar. NÃO SOU TITULAR / SENHORIO: agradecer, registar e terminar; não pedir dados de outra pessoa. ORIGEM DO CONTACTO: indicar apenas a origem registada na campanha; se não existir, não inventar e registar para revisão. FIDELIZAÇÃO >3 MESES: registar mês/ano; propor contacto mais perto do fim apenas se aceitar e terminar. RECUSA DE RESPOSTA: agradecer e terminar. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirmar que vai registar o pedido, aplicar a exclusão e terminar imediatamente.",
+    "notes": "ORDEM DO GUIÃO: 1) Confirmar nome e se é titular/responsável pelas telecomunicações da casa. Se não, se o senhorio trata do serviço, pessoa errada, recusa ou pedido de fim: registar resultado e terminar. 2) Perguntar operadora. Se não tiver serviço fixo, perguntar se usa apenas telemóvel ou teria interesse em internet fixa; sem interesse, terminar. 3) Perguntar satisfação com internet; se parcial/insatisfeito, identificar velocidade, falhas, Wi-Fi, preço ou outro. Uma pergunta de cada vez. 4) Perguntar mês/ano do fim da fidelização. Já terminou ou faltam até 3 meses: continuar. Faltam mais de 3 meses: propor contacto mais perto, só se aceitar, e terminar. Se desconhecida, perguntar data aproximada de instalação/alteração e registar como estimativa; nunca presumir uma data contratual ou fidelização de 24 meses. 5) Perguntar tecnologia: fibra; se não, cabo, ADSL ou satélite; se não souber, registar desconhecida. 6) Perguntar localidade; concelho só se necessário. Se recusar, terminar. 7) Perguntar quanto paga por mês; se não souber, registar desconhecida; se recusar, agradecer e terminar. 8) Apresentar comparação sem prometer cobertura, poupança ou preço. Se não tiver interesse, terminar. Se não quiser mudar, esclarecer uma vez que comparar não obriga a mudar; terminar se mantiver a recusa. 9) Se houver interesse, perguntar preferência de período (manhã/tarde) e dia/hora para contacto humano. Registar a preferência; não dizer que ficou agendado sem confirmação de disponibilidade. 10) Depois da chamada, resumir: operadora, titularidade, satisfação/problema, tecnologia, localidade, mensalidade, fidelização/data e se estimada, interesse, preferência de contacto, origem, resultado e pedido de exclusão. Não ler o relatório em voz alta. Nunca inventar dados, preços, cobertura, datas ou origem; nunca insistir após uma recusa. CONTINUIDADE: depois de cada resposta do cliente, reconhece brevemente e passa à próxima pergunta necessária do guião. Um sim à abertura significa continuar para a operadora; não é uma condição de fim. Não repitas perguntas já respondidas.",
+    "tone": "Português de Portugal; voz natural, cordial e clara, ritmo moderado, frases curtas, uma pergunta de cada vez. Sem pressão, urgência falsa ou leitura mecânica."
+}
+
+
+def _campaign_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
     profile = profile or {}
+    company = re.sub(r"[^a-z0-9]", "", _clean(profile.get("company"), 120).casefold())
+    name = _clean(profile.get("name"), 80).casefold()
+    profile_id = _clean(profile.get("id"), 80)
+    is_ricardo = profile_id in {"compara-plus-telecom-ricardo", "compara-plus-ricardo-natural"} or (name.startswith("ricardo") and "compara" in company)
+    try:
+        version = int(profile.get("scriptVersion") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if is_ricardo and version < COMPARA_SCRIPT_VERSION:
+        return {**profile, **COMPARA_RESTORED_SCRIPT, "scriptVersion": COMPARA_SCRIPT_VERSION}
+    return profile
+
+
+def build_instructions(profile: dict[str, Any] | None = None) -> str:
+    profile = _campaign_profile(profile)
 
     base = """
 Tu és o Lumin, um assistente virtual de voz de inteligência artificial.
@@ -184,7 +214,7 @@ Se algum dado não estiver aqui ou não tiveres a certeza, não inventes.
 
 
 def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> str:
-    profile = profile or {}
+    profile = _campaign_profile(profile)
     opening = _clean(profile.get("opening"), 800)
     agent_name = _clean(profile.get("name"), 80) or "Lumin"
     company = _clean(profile.get("company"), 120)
@@ -192,12 +222,13 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     name_part = f", {customer_name}" if customer_name and customer_name.casefold() != "cliente" else ""
     company_key = re.sub(r"[^a-z0-9]", "", company.casefold())
 
-    if "compara" in company_key:
-        return (
-            f"Boa tarde{name_part}. Sou o {agent_name}, assistente virtual de IA da Compara+. "
-            "Estou a ligar para confirmar a sua operadora e a data de fim da fidelização. "
-            "Qual é a sua operadora atual?"
-        )
+    if "compara" in company_key and opening:
+        opening = re.sub(r"\[(?:nome|name)\]", customer_name or "o responsável", opening, flags=re.IGNORECASE)
+        opening = re.sub(r"\s{2,}", " ", opening).strip()
+        # The campaign opening already introduces Ricardo; do not prepend a
+        # second introduction or replace the customer-configured approach.
+        if "assistente virtual" in opening.casefold():
+            return opening
 
     if opening:
         opening = re.sub(r"\[(?:nome|name)\]", customer_name, opening, flags=re.IGNORECASE)
