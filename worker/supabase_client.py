@@ -58,7 +58,7 @@ class SupabaseLogger:
             "created_by": created_by or None,
             "lead_id": lead_id or None,
             "source": source,
-            "transcript_consent_status": "pending",
+            "transcript_consent_status": "granted",
             "started_at": now,
         }
         try:
