@@ -276,10 +276,12 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     )
 
 
-TRANSCRIPT_CONSENT_QUESTION = (
-    "Posso guardar uma transcrição em texto desta chamada no SD Dialer "
-    "para consulta da equipa? Se preferir, continuamos sem a guardar."
-)
+def transcript_consent_question(retention_days: int = 90) -> str:
+    return (
+        "Posso guardar uma transcrição em texto desta chamada no SD Dialer "
+        f"por até {retention_days} dias, para consulta da equipa? "
+        "Se preferir, continuamos sem a guardar."
+    )
 
 TRANSCRIPT_CONSENT_INSTRUCTIONS = """
 
@@ -295,6 +297,7 @@ AUTORIZAÇÃO PARA GUARDAR A TRANSCRIÇÃO
 def build_transcript_consent_greeting(
     profile: dict[str, Any] | None,
     customer_name: str = "",
+    retention_days: int = 90,
 ) -> str:
     profile = _campaign_profile(profile)
     agent_name = _clean(profile.get("name"), 80) or "Lumin"
@@ -308,7 +311,7 @@ def build_transcript_consent_greeting(
     return (
         f"Olá{name_part}. Sou o {agent_name}, assistente virtual de IA{company_part}. "
         "Esta chamada não é gravada em áudio. "
-        f"{TRANSCRIPT_CONSENT_QUESTION}"
+        f"{transcript_consent_question(retention_days)}"
     )
 
 
@@ -319,10 +322,12 @@ class LuminAgent(Agent):
         customer_name: str = "",
         capture_phone_lead: bool = False,
         transcript_consent_required: bool = False,
+        transcript_retention_days: int = 90,
     ) -> None:
         self._profile = profile or {}
         self._customer_name = customer_name
         self._transcript_consent_required = transcript_consent_required
+        self._transcript_retention_days = transcript_retention_days
         instructions = build_instructions(self._profile)
         if capture_phone_lead:
             instructions += lead_capture_instructions()
@@ -332,7 +337,11 @@ class LuminAgent(Agent):
 
     async def on_enter(self):
         greeting = (
-            build_transcript_consent_greeting(self._profile, self._customer_name)
+            build_transcript_consent_greeting(
+                self._profile,
+                self._customer_name,
+                self._transcript_retention_days,
+            )
             if self._transcript_consent_required
             else build_greeting(self._profile, self._customer_name)
         )
@@ -356,6 +365,7 @@ async def entrypoint(ctx: JobContext):
     lead_capture = LeadCapture.from_job(metadata)
     voice_call_logger: SupabaseLogger | None = None
     transcript_consent_state = {"value": "unavailable" if is_sd_dialer_call else "not_requested"}
+    transcript_retention_days = 90
     call_started_at = datetime.now(timezone.utc)
 
     if is_sd_dialer_call and call_id and company_id:
@@ -374,7 +384,7 @@ async def entrypoint(ctx: JobContext):
             if created:
                 voice_call_logger = candidate_logger
                 transcript_consent_state["value"] = "pending"
-                await voice_call_logger.cleanup_expired_transcripts(company_id)
+                transcript_retention_days = await voice_call_logger.cleanup_expired_transcripts(company_id)
             else:
                 await candidate_logger.close()
         except Exception as exc:
@@ -571,7 +581,7 @@ async def entrypoint(ctx: JobContext):
                 await voice_call_logger.log_transcript(
                     call_id,
                     "agent",
-                    TRANSCRIPT_CONSENT_QUESTION,
+                    transcript_consent_question(transcript_retention_days),
                     company_id=company_id,
                 )
                 await voice_call_logger.log_transcript(
@@ -644,6 +654,7 @@ async def entrypoint(ctx: JobContext):
             transcript_consent_required=bool(
                 is_sd_dialer_call and voice_call_logger is not None
             ),
+            transcript_retention_days=transcript_retention_days,
         ),
         room=ctx.room,
     )
