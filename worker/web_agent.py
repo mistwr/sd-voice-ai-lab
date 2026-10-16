@@ -272,6 +272,7 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
         "Posso falar consigo por um momento?"
     )
 
+
 class LuminAgent(Agent):
     def __init__(
         self,
