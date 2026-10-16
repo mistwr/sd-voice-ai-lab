@@ -673,6 +673,73 @@ async def outbound_call_status(
     return state
 
 
+async def _sd_active_vodafone_script(token: str, company_id: str) -> dict[str, Any] | None:
+    rows = await _sd_request_json(
+        "/rest/v1/roteiros_venda",
+        token,
+        {
+            "company_id": f"eq.{company_id}",
+            "segmento": "eq.VODAFONE",
+            "ativo": "eq.true",
+            "select": "id,titulo,conteudo,ordem",
+            "order": "ordem.asc,updated_at.desc",
+            "limit": "1",
+        },
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _apply_sd_vodafone_script(
+    profile: dict[str, Any],
+    script: dict[str, Any],
+) -> dict[str, Any]:
+    content = str(script.get("conteudo") or "").strip()
+    opening_match = re.search(
+        r"(?is)Abertura\\s*:\\s*(.+?)(?=\\n\\s*1\\.\\s*ª\\s*Pergunta\\b)",
+        content,
+    )
+    if not opening_match:
+        logger.warning("Active Vodafone script has no parseable opening")
+        return profile
+
+    opening = opening_match.group(1).strip().strip('"“” ')
+    # The caller name always comes from the selected/manual lead context.
+    opening = re.sub(
+        r"\\bRicardo(?:\\s+José)?(?:\\s+Santos)?\\b",
+        "[nome]",
+        opening,
+        flags=re.IGNORECASE,
+    )
+    if "[nome]" not in opening.casefold():
+        opening = re.sub(
+            r"^(Boa tarde)(?:,?\\s*)",
+            r"\\1, estou a falar com o Sr. [nome]? ",
+            opening,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+    script_title = str(script.get("titulo") or "Vodafone").strip()[:120]
+    profile.update({
+        "scriptVersion": 9,
+        "campaignSegment": "VODAFONE",
+        "description": "Agente de voz da Compara+ a testar o guião Vodafone.",
+        "objective": "Seguir o guião Vodafone ativo do Super Admin, qualificar o pacote atual e encaminhar o contacto para um especialista.",
+        "offer": "Proposta Vodafone sem compromisso. Não inventes preços, cobertura, poupanças nem condições que não estejam configuradas.",
+        "opening": opening[:800],
+        "notes": (
+            f"GUIÃO ATIVO DO SUPER ADMIN — {script_title}\\n"
+            f"{content}\\n\\n"
+            "Segue as perguntas do guião pela ordem, uma de cada vez, sem repetir respostas já dadas. "
+            "Usa apenas o nome da lead selecionada ou do campo manual; nunca uses o nome escrito no exemplo. "
+            "Não perguntes por consentimento para gravar, transcrever ou guardar contacto. "
+            "Se a pessoa aceitar o contacto de um especialista e não indicar um dia, pergunta só o dia preferido; "
+            "depois usa a agenda de follow-up apenas com uma data/hora acordada e confirma só após sucesso."
+        )[:2200],
+    })
+    return profile
+
+
 @app.post("/api/sd-dialer/call")
 async def sd_dialer_call(
     payload: SDDialerCallRequest,
@@ -759,6 +826,14 @@ async def sd_dialer_call(
     agent_profile = _sd_agent_profile(payload.agent_id, company_name)
     if payload.agent is not None:
         agent_profile = _apply_sd_agent_overrides(agent_profile, payload.agent)
+
+    if payload.agent_id == "lumin-telecom":
+        active_script = await _sd_active_vodafone_script(
+            token,
+            str(profile.get("company_id") or ""),
+        )
+        if active_script:
+            agent_profile = _apply_sd_vodafone_script(agent_profile, active_script)
 
     state = _queue_call(
         phone,
