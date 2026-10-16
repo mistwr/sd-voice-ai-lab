@@ -95,6 +95,66 @@ class SupabaseLogger:
             logger.exception("Falha na limpeza de transcricoes expiradas company_id=%s", company_id)
         return days
 
+    async def create_follow_up(
+        self,
+        call_id: str,
+        lead_id: str,
+        partner_id: str,
+        company_id: str,
+        scheduled_at: str,
+        notes: str,
+    ) -> bool:
+        try:
+            # Keep the Agenda tidy: only the latest pending follow-up remains active.
+            r = await self._client.patch(
+                "/rest/v1/follow_ups",
+                params={"lead_id": f"eq.{lead_id}", "done": "eq.false"},
+                json={"done": True},
+            )
+            r.raise_for_status()
+
+            r = await self._client.post(
+                "/rest/v1/follow_ups",
+                json={
+                    "lead_id": lead_id,
+                    "parceiro_id": partner_id,
+                    "company_id": company_id,
+                    "scheduled_at": scheduled_at,
+                    "notes": notes,
+                    "done": False,
+                },
+                headers={**_HEADERS, "Prefer": "return=minimal"},
+            )
+            r.raise_for_status()
+
+            # Keep the lead badge/list ordering in sync with the Agenda entry.
+            try:
+                r = await self._client.get(
+                    "/rest/v1/leads",
+                    params={"id": f"eq.{lead_id}", "select": "custom_fields"},
+                )
+                r.raise_for_status()
+                rows = r.json()
+                if rows:
+                    custom_fields = rows[0].get("custom_fields") or {}
+                    if not isinstance(custom_fields, dict):
+                        custom_fields = {}
+                    custom_fields["data_proximo_ctt"] = scheduled_at[:10]
+                    r = await self._client.patch(
+                        "/rest/v1/leads",
+                        params={"id": f"eq.{lead_id}"},
+                        json={"custom_fields": custom_fields},
+                    )
+                    r.raise_for_status()
+            except Exception:
+                logger.exception("Follow-up criado, mas não foi possível atualizar data na lead id=%s", lead_id)
+
+            logger.info("SD Dialer follow-up criado call_id=%s lead_id=%s", call_id, lead_id)
+            return True
+        except Exception:
+            logger.exception("Falha a criar follow-up SD Dialer call_id=%s lead_id=%s", call_id, lead_id)
+            return False
+
     async def close(self) -> None:
         await self._client.aclose()
 

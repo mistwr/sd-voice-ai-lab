@@ -258,6 +258,10 @@ async def _sd_request_json(
     path: str,
     token: str,
     params: dict[str, str] | None = None,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    prefer: str | None = None,
 ) -> Any:
     if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_ANON_KEY):
         raise HTTPException(status_code=503, detail="Integracao SD Dialer nao configurada")
@@ -267,18 +271,28 @@ async def _sd_request_json(
     if query:
         url += "?" + query
 
+    headers = {
+        "apikey": SD_DIALER_SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    request_body = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        request_body = json.dumps(body).encode("utf-8")
+    if prefer:
+        headers["Prefer"] = prefer
+
     def do_request():
         req = urllib.request.Request(
             url,
-            headers={
-                "apikey": SD_DIALER_SUPABASE_ANON_KEY,
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            method="GET",
+            data=request_body,
+            headers=headers,
+            method=method.upper(),
         )
         with urllib.request.urlopen(req, timeout=8) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else None
 
     try:
         return await asyncio.to_thread(do_request)
@@ -287,10 +301,11 @@ async def _sd_request_json(
             raise HTTPException(status_code=401, detail="Sessao do SD Dialer invalida")
         logger.warning("SD Dialer Supabase request failed: %s %s", exc.code, path)
         raise HTTPException(status_code=502, detail="Falha ao validar dados do SD Dialer")
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("SD Dialer Supabase request error: %s", exc)
         raise HTTPException(status_code=502, detail="Falha ao validar dados do SD Dialer")
-
 
 async def _require_sd_context(authorization: str | None) -> tuple[str, dict[str, Any], str]:
     token = _sd_bearer_token(authorization)
@@ -658,6 +673,8 @@ async def sd_dialer_call(
 
     lead = None
     lead_id: str | None = None
+    lead_name = ""
+
     if has_lead:
         leads = await _sd_request_json(
             "/rest/v1/rpc/get_voice_lead_for_call",
@@ -670,19 +687,37 @@ async def sd_dialer_call(
         if str(lead.get("company_id") or "") != str(profile.get("company_id") or ""):
             raise HTTPException(status_code=403, detail="Lead pertence a outra empresa")
         lead_id = str(lead.get("id") or "")
+        lead_name = str(lead.get("nome") or "Cliente")
+        phone = _normalise_sd_phone(str(lead.get("telefone") or ""))
     else:
         if not payload.consent_confirmed:
             raise HTTPException(status_code=400, detail="Confirma que tens autorizacao para contactar este numero")
-        matches = await _sd_request_json(
-            "/rest/v1/rpc/find_voice_lead_by_phone",
+        lead_name = str(payload.name or "").strip()
+        if not lead_name:
+            raise HTTPException(status_code=400, detail="Indica o nome da lead manual para a chamada e a agenda")
+        phone = _normalise_sd_phone(str(payload.phone or ""))
+
+        # Manual calls get their own manual lead, so a phone match can never
+        # silently replace the name entered by the operator with another lead's name.
+        created_leads = await _sd_request_json(
+            "/rest/v1/leads",
             token,
-            {"p_phone": payload.phone or ""},
+            {"select": "id,company_id,nome"},
+            method="POST",
+            body={
+                "company_id": str(profile["company_id"]),
+                "assigned_to": user_id,
+                "nome": lead_name,
+                "telefone": phone,
+                "status": "novo",
+                "origem": "manual",
+            },
+            prefer="return=representation",
         )
-        lead = matches[0] if isinstance(matches, list) and matches else None
-        if lead and str(lead.get("company_id") or "") != str(profile.get("company_id") or ""):
-            raise HTTPException(status_code=403, detail="Lead pertence a outra empresa")
-        if lead:
-            lead_id = str(lead.get("id") or "")
+        lead = created_leads[0] if isinstance(created_leads, list) and created_leads else None
+        lead_id = str((lead or {}).get("id") or "")
+        if not lead_id:
+            raise HTTPException(status_code=502, detail="Nao foi possivel criar a lead manual")
 
     if lead and lead.get("status") in {
         "nao_interessado",
@@ -708,12 +743,6 @@ async def sd_dialer_call(
         else "SD Dialer"
     )
 
-    phone = _normalise_sd_phone(str(payload.phone if is_manual else (lead or {}).get("telefone") or ""))
-    lead_name = (
-        str((lead or {}).get("nome") or payload.name or "Contacto manual")
-        if is_manual
-        else str((lead or {}).get("nome") or "Cliente")
-    )
     agent_profile = _sd_agent_profile(payload.agent_id, company_name)
     if payload.agent is not None:
         agent_profile = _apply_sd_agent_overrides(agent_profile, payload.agent)
@@ -737,9 +766,8 @@ async def sd_dialer_call(
         "status": state["status"],
         "roomName": state["roomName"],
         "manual": is_manual,
-        "lead": {"id": lead_id, "nome": lead_name} if lead_id else None,
+        "lead": {"id": lead_id, "nome": lead_name},
     }
-
 
 @app.get("/api/sd-dialer/call/{call_id}")
 async def sd_dialer_call_status(
