@@ -330,10 +330,9 @@ class LuminAgent(Agent):
         )
         if capture_phone_lead:
             instructions += lead_capture_instructions()
-        super().__init__(
-            instructions=instructions,
-            tools=[self.schedule_follow_up] if follow_up_enabled else [],
-        )
+        super().__init__(instructions=instructions)
+        if not follow_up_enabled:
+            self.update_tools([])
 
     @function_tool()
     async def schedule_follow_up(self, context: RunContext, scheduled_at: str) -> str:
