@@ -97,7 +97,7 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
 
 
 # The gateway can pass a Super Admin campaign script for each call.
-COMPARA_SCRIPT_VERSION = 9
+COMPARA_SCRIPT_VERSION = 10
 COMPARA_RESTORED_SCRIPT = {
     "id": "lumin-telecom",
     "name": "Lumin",
@@ -233,6 +233,7 @@ Segue esta lógica de venda consultiva:
         sales_mode = """
 MODO COMERCIAL TELECOM COMPARA+
 - Se as notas incluírem um GUIÃO ATIVO DO SUPER ADMIN, segue as perguntas e o fecho pela ordem desse guião. Não acrescentes perguntas de outros guiões.
+- Quando a pergunta for sobre a operadora atual, interpreta respostas com som semelhante a MEO — incluindo transcrições como “meu”, “mei” ou “mel” — como MEO. Não repitas nem peças confirmação apenas por essa variação.
 - Usa o nome dinâmico da lead fornecida para a chamada; nunca leias um nome de exemplo como se fosse o nome real.
 - Aborda o pacote de telecomunicações como um todo: internet, televisão, telefone fixo, tarifários móveis e linhas incluídas. Não fales apenas da internet.
 - Usa o contexto da lead para começar. Se faltar informação, escolhe só a pergunta que ajuda a comparar: serviços incluídos, operadora atual ou prioridade principal. Pergunta pelo custo aproximado apenas se o preço for uma prioridade; pergunta o número de linhas apenas se os telemóveis forem relevantes.
@@ -582,7 +583,11 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=inference.VAD(),
-        stt=inference.STT("deepgram/nova-3", language="pt"),
+        stt=inference.STT(
+            "deepgram/nova-3",
+            language="pt",
+            keyterm=["MEO", "NOS", "Vodafone", "DIGI"],
+        ),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
         turn_handling=turn_handling,
@@ -669,20 +674,34 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(_finalize_call)
 
-    await session.start(
-        agent=LuminAgent(
-            profile if isinstance(profile, dict) else {},
-            customer_name=customer_name,
-            capture_phone_lead=lead_capture is not None,
-            follow_up_logger=voice_call_logger if is_sd_dialer_call else None,
-            follow_up_call_id=call_id if is_sd_dialer_call else "",
-            follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
-            follow_up_company_id=company_id if is_sd_dialer_call else "",
-            follow_up_requested_by=requested_by if is_sd_dialer_call else "",
-        ),
-        room=ctx.room,
+    agent = LuminAgent(
+        profile if isinstance(profile, dict) else {},
+        customer_name=customer_name,
+        capture_phone_lead=lead_capture is not None,
+        follow_up_logger=voice_call_logger if is_sd_dialer_call else None,
+        follow_up_call_id=call_id if is_sd_dialer_call else "",
+        follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
+        follow_up_company_id=company_id if is_sd_dialer_call else "",
+        follow_up_requested_by=requested_by if is_sd_dialer_call else "",
     )
-    await ctx.connect()
+
+    if call_id:
+        # Outbound calls are dispatched as soon as SIP reports "answered", but
+        # the callee must finish joining the room before the opening is spoken.
+        await ctx.connect()
+        sip_participant = await ctx.wait_for_participant(identity=f"callee-{call_id}")
+        logger.info(
+            "outbound callee ready before agent session start",
+            extra={"participant_identity": sip_participant.identity},
+        )
+        await session.start(
+            agent=agent,
+            room=ctx.room,
+            participant=sip_participant,
+        )
+    else:
+        await session.start(agent=agent, room=ctx.room)
+        await ctx.connect()
 
 
 if __name__ == "__main__":
