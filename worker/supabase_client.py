@@ -74,7 +74,8 @@ class SupabaseLogger:
             logger.exception("Falha a criar registo de chamada id=%s", call_id)
             return False
 
-    async def cleanup_expired_transcripts(self, company_id: str) -> None:
+    async def cleanup_expired_transcripts(self, company_id: str) -> int:
+        days = 90
         try:
             r = await self._client.get(
                 "/rest/v1/voice_settings",
@@ -92,6 +93,7 @@ class SupabaseLogger:
             r.raise_for_status()
         except Exception:
             logger.exception("Falha na limpeza de transcricoes expiradas company_id=%s", company_id)
+        return days
 
     async def close(self) -> None:
         await self._client.aclose()
