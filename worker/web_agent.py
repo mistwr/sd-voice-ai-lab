@@ -96,28 +96,19 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
-# The gateway can pass a Super Admin campaign script for each call.
-COMPARA_SCRIPT_VERSION = 10
+# Keep the Compara+ call short, personal and focused on booking a useful next step.
+COMPARA_SCRIPT_VERSION = 7
 COMPARA_RESTORED_SCRIPT = {
     "id": "lumin-telecom",
     "name": "Lumin",
-    "description": "Agente virtual da Compara+ para comparar pacotes de telecomunicações residenciais: internet, televisão, telefone fixo e telemóveis.",
-    "objective": "Perceber como está composto o pacote de telecomunicações e o que a pessoa quer melhorar; apresentar uma oferta autorizada e conduzir à adesão quando possível ou marcar um contacto com consultor.",
-    "opening": "Boa tarde, [nome]. Sou o Lumin, agente virtual da Compara+. Ajudamos a comparar internet, televisão, telefone fixo e tarifários móveis, em separado ou em pacote. O que gostava de melhorar no que tem atualmente?",
-    "product": "A Compara+ ajuda a comparar internet fixa ou fibra, televisão, telefone fixo e tarifários ou linhas móveis, em separado ou em pacotes integrados. A comparação pode considerar os serviços e o custo do pacote em conjunto. O consultor confirma cobertura, preços e condições quando não estejam definidos no perfil. Nunca inventes dados.",
-    "offer": "Apresenta os preços, campanhas e condições configurados no perfil central do agente, quando existirem. Se não houver oferta concreta ou a cobertura não estiver validada, não inventes: explica que um consultor confirma os dados. Quando a oferta corresponder à necessidade, faz uma pergunta direta para avançar.",
-    "objections": "CUSTO: se o preço for importante e ainda desconhecido, pergunta apenas o valor aproximado do pacote completo e relaciona-o com a oferta configurada. INTERNET, TV OU MÓVEL: responde sobre o serviço referido. DÚVIDAS: esclarece o ponto concreto antes de avançar. SATISFEITO OU RECUSA: oferece uma comparação sem compromisso no máximo uma vez; perante recusa clara, agradece e termina sem insistir. PEDIDO PARA NÃO VOLTAR A CONTACTAR: respeita e termina.",
-    "notes": """VENDA CONSULTIVA DE TELECOMUNICAÇÕES
-1) Usa o nome e os dados do contexto desta chamada, incluindo o campo manual. Nunca procures dados noutras leads nem perguntes o nome.
-2) O âmbito é o pacote completo: internet fixa/fibra, televisão, telefone fixo, tarifários móveis e quantidade de linhas móveis. Não reduzas a conversa à internet.
-3) Aproveita tudo o que já estiver no contexto ou que a pessoa já tenha dito. Não repitas perguntas. Pergunta pela operadora apenas se ainda for desconhecida e necessária para comparar.
-4) Qualifica naturalmente, com no máximo três perguntas relevantes e uma de cada vez: que serviços estão incluídos; o que quer melhorar primeiro (custo, internet, TV ou telemóveis); e, se o custo for a prioridade, quanto paga aproximadamente pelo pacote. Pergunta quantas linhas móveis só se isso for relevante. Não faças um questionário.
-5) Não perguntes sobre fidelização, titularidade, autorização para guardar o contacto, gravação ou transcrição. Não peças email, NIF ou morada nesta chamada. As leads já estão consentidas.
-6) Entre perguntas, dá informação útil: explica que a comparação pode analisar o pacote completo e quais serviços podem ser considerados. Apresenta apenas ofertas, preços e condições existentes no perfil central; nunca inventes poupanças, cobertura, campanhas ou disponibilidade.
-7) Quando identificares uma necessidade, resume-a numa frase natural e liga-a à opção configurada. Não fiques só a recolher respostas. Se a oferta concreta servir, pergunta diretamente se quer avançar para a adesão. Se for necessária validação ou formalização por uma pessoa, propõe logo um contacto com consultor para tratar disso.
-8) Se aceitar o contacto de um consultor, pergunta o melhor dia e hora. Se indicar ambos de uma vez, chama schedule_follow_up uma única vez com data/hora ISO 8601 no fuso Europe/Lisbon. Se faltar apenas a hora, pergunta só a hora. Confirma a marcação apenas se a ferramenta devolver sucesso. Nunca digas que a adesão foi concluída se não foi.
-9) Se houver uma objeção hesitante, responde ao ponto e faz uma única tentativa clara de avançar. Se a pessoa recusar claramente, agradece e termina. Não insistas.
-10) Fala com naturalidade, em uma ou duas frases úteis de cada vez. Uma pergunta por turno. Não sejas telegráfico, não repitas confirmações e não recites este guião."""
+    "description": "Lumin é o assistente virtual da Compara+. Conversa de forma breve e natural, percebe o que a pessoa gostaria de melhorar e encaminha o interesse para um consultor.",
+    "objective": "Perceber a necessidade principal e, havendo interesse, agendar um contacto com um consultor para comparar opções de internet e televisão.",
+    "opening": "Boa tarde, [nome]. Sou o Lumin, assistente virtual da Compara+. O que gostava de melhorar na sua internet?",
+    "product": "A Compara+ compara opções residenciais de internet e televisão. Não inventes preços, cobertura, poupanças ou condições. Ouve a necessidade concreta e oferece uma comparação com um consultor, sem compromisso.",
+    "offer": "Quando a pessoa mostrar uma necessidade ou interesse, oferece um contacto com um consultor para comparar opções. Não prometas poupança, preço, cobertura ou mudança de operador.",
+    "objections": "RECUSA CLARA: agradece e termina sem insistir. SATISFEITO: reconhece e oferece uma comparação sem compromisso uma única vez; se não quiser, termina. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirma brevemente e termina.",
+    "notes": """CONVERSA COMERCIAL DIRETA: 1) Usa apenas o nome recebido da lead ou do campo manual. Nunca procures nomes noutras leads nem perguntes o nome. 2) Não perguntes titularidade, operadora, fidelização, preços, morada, tecnologia, email ou se podes guardar o contacto. Não perguntes sobre gravação ou transcrição. 3) A abertura pergunta o que gostaria de melhorar na internet. Responde ao que a pessoa disser, reconhece a necessidade em poucas palavras e não repitas perguntas já respondidas. 4) Se houver uma necessidade concreta, oferece um contacto com consultor e pergunta o melhor dia e hora. Se a pessoa der logo dia e hora, agenda sem perguntar novamente. Se aceitar mas faltar a hora, pergunta só a hora. 5) Chama schedule_follow_up uma vez, com data/hora ISO 8601 no fuso Europe/Lisbon. Só confirmes a marcação se a ferramenta devolver sucesso. 6) Se não houver interesse, agradece e termina. 7) Fala como numa conversa breve, com respostas de até 15 palavras antes de uma pergunta; sem confirmações automáticas ou discurso de guião.""",
+    "tone": "Português de Portugal, próximo, natural e direto. Frases curtas, uma pergunta de cada vez, sem tom de questionário ou insistência."
 }
 
 
@@ -160,7 +151,7 @@ REGRAS GERAIS
 - Guarda mentalmente os dados já respondidos. Não perguntes outra vez algo que já foi fornecido ou esteja explícito no contexto; aproveita respostas que cubram várias perguntas.
 - Faz apenas a pergunta seguinte necessária, uma de cada vez. Se a resposta for ambígua, esclarece uma única vez com palavras diferentes; se continuar incerta, regista-a como desconhecida e avança, salvo se for indispensável para continuar.
 - Evita ciclos: não repitas a abertura, explicação, pergunta, resumo ou confirmação. Responde ao que a pessoa disse, sem acrescentar frases de confirmação automáticas.
-- Sê conciso sem ser telegráfico: dá informação suficiente em uma ou duas frases e faz apenas uma pergunta de cada vez.
+- Usa respostas muito curtas, normalmente até 15 palavras antes da pergunta, e faz uma pergunta de cada vez.
 - Começa pela resposta útil, sem introduções desnecessárias.
 - Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
 - Não enchas silêncio com texto. Uma resposta direta é melhor do que um parágrafo.
@@ -229,20 +220,6 @@ Segue esta lógica de venda consultiva:
 9. Mantém o controlo da conversa com perguntas, mas sem pressão enganosa, urgência falsa ou insistência após uma recusa clara.
 """
 
-    elif profile_id == "lumin-telecom" or "compara" in company_name:
-        sales_mode = """
-MODO COMERCIAL TELECOM COMPARA+
-- Se as notas incluírem um GUIÃO ATIVO DO SUPER ADMIN, segue as perguntas e o fecho pela ordem desse guião. Não acrescentes perguntas de outros guiões.
-- Quando a pergunta for sobre a operadora atual, interpreta respostas com som semelhante a MEO — incluindo transcrições como “meu”, “mei” ou “mel” — como MEO. Não repitas nem peças confirmação apenas por essa variação.
-- Usa o nome dinâmico da lead fornecida para a chamada; nunca leias um nome de exemplo como se fosse o nome real.
-- Aborda o pacote de telecomunicações como um todo: internet, televisão, telefone fixo, tarifários móveis e linhas incluídas. Não fales apenas da internet.
-- Usa o contexto da lead para começar. Se faltar informação, escolhe só a pergunta que ajuda a comparar: serviços incluídos, operadora atual ou prioridade principal. Pergunta pelo custo aproximado apenas se o preço for uma prioridade; pergunta o número de linhas apenas se os telemóveis forem relevantes.
-- Explica o valor do serviço: a comparação pode olhar para os serviços e custos em conjunto, e a equipa confirma a cobertura e as condições atuais. Não apresentes uma promessa vaga de poupança.
-- Depois de perceberes a prioridade, dá uma resposta útil antes da pergunta seguinte. Relaciona a necessidade com as ofertas existentes no perfil central. Se não houver oferta ou preço configurado, diz claramente que um consultor confirma essa parte.
-- Conduz ao fecho. Se a solução configurada corresponder ao que a pessoa quer, pergunta se quer avançar para a adesão. Se for necessária validação ou formalização humana, oferece marcar já o contacto com um consultor. Não fiques apenas a fazer perguntas.
-- Perante uma objeção hesitante, responde uma vez ao motivo e volta a propor um próximo passo concreto. Perante uma recusa clara, agradece e termina sem insistir.
-"""
-
     result = base + sales_mode + """
 
 CONTEXTO DESTA EMPRESA
@@ -302,7 +279,7 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
             opening = _add_customer_name_to_opening(opening, customer_name)
         # The campaign opening already introduces Lumin; do not prepend a
         # second introduction or replace the campaign wording.
-        if any(identity in opening.casefold() for identity in ("assistente virtual", "agente virtual")):
+        if "assistente virtual" in opening.casefold():
             return opening
 
     if opening:
@@ -583,10 +560,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=inference.VAD(),
-        stt=inference.STT(
-            "deepgram/nova-3",
-            language="pt",
-        ),
+        stt=inference.STT("deepgram/nova-3", language="pt"),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
         turn_handling=turn_handling,
@@ -673,34 +647,20 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(_finalize_call)
 
-    agent = LuminAgent(
-        profile if isinstance(profile, dict) else {},
-        customer_name=customer_name,
-        capture_phone_lead=lead_capture is not None,
-        follow_up_logger=voice_call_logger if is_sd_dialer_call else None,
-        follow_up_call_id=call_id if is_sd_dialer_call else "",
-        follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
-        follow_up_company_id=company_id if is_sd_dialer_call else "",
-        follow_up_requested_by=requested_by if is_sd_dialer_call else "",
+    await session.start(
+        agent=LuminAgent(
+            profile if isinstance(profile, dict) else {},
+            customer_name=customer_name,
+            capture_phone_lead=lead_capture is not None,
+            follow_up_logger=voice_call_logger if is_sd_dialer_call else None,
+            follow_up_call_id=call_id if is_sd_dialer_call else "",
+            follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
+            follow_up_company_id=company_id if is_sd_dialer_call else "",
+            follow_up_requested_by=requested_by if is_sd_dialer_call else "",
+        ),
+        room=ctx.room,
     )
-
-    if call_id:
-        # Outbound calls are dispatched as soon as SIP reports "answered", but
-        # the callee must finish joining the room before the opening is spoken.
-        await ctx.connect()
-        sip_participant = await ctx.wait_for_participant(identity=f"callee-{call_id}")
-        logger.info(
-            "outbound callee ready before agent session start",
-            extra={"participant_identity": sip_participant.identity},
-        )
-        await session.start(
-            agent=agent,
-            room=ctx.room,
-            participant=sip_participant,
-        )
-    else:
-        await session.start(agent=agent, room=ctx.room)
-        await ctx.connect()
+    await ctx.connect()
 
 
 if __name__ == "__main__":
