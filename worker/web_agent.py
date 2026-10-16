@@ -237,7 +237,7 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     agent_name = _clean(profile.get("name"), 80) or "Lumin"
     company = _clean(profile.get("company"), 120)
     customer_name = _clean(customer_name, 100)
-    has_customer_name = bool(customer_name and customer_name.casefold() != "cliente")
+    has_customer_name = bool(customer_name and customer_name.casefold() not in {"cliente", "contacto manual"})
     name_part = f", {customer_name}" if has_customer_name else ""
     name_placeholder = re.compile(r"\[(?:nome|name)\]", flags=re.IGNORECASE)
     company_key = re.sub(r"[^a-z0-9]", "", company.casefold())
