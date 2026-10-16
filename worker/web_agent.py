@@ -213,35 +213,64 @@ Se algum dado não estiver aqui ou não tiveres a certeza, não inventes.
 """ + context
 
 
+def _add_customer_name_to_opening(opening: str, customer_name: str) -> str:
+    if not customer_name or customer_name.casefold() in opening.casefold():
+        return opening
+
+    greeting = re.match(
+        r"^\\s*(Olá|Bom dia|Boa tarde|Boa noite)(?:[!,.]?\\s*)",
+        opening,
+        flags=re.IGNORECASE,
+    )
+    if not greeting:
+        return f"Olá, {customer_name}. {opening}".strip()
+
+    rest = opening[greeting.end():].lstrip()
+    if rest:
+        rest = rest[0].upper() + rest[1:]
+    return f"{greeting.group(1)}, {customer_name}. {rest}".strip()
+
+
 def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> str:
     profile = _campaign_profile(profile)
     opening = _clean(profile.get("opening"), 800)
     agent_name = _clean(profile.get("name"), 80) or "Lumin"
     company = _clean(profile.get("company"), 120)
     customer_name = _clean(customer_name, 100)
-    name_part = f", {customer_name}" if customer_name and customer_name.casefold() != "cliente" else ""
+    has_customer_name = bool(customer_name and customer_name.casefold() != "cliente")
+    name_part = f", {customer_name}" if has_customer_name else ""
+    name_placeholder = re.compile(r"\\[(?:nome|name)\\]", flags=re.IGNORECASE)
     company_key = re.sub(r"[^a-z0-9]", "", company.casefold())
 
     if "compara" in company_key and opening:
-        opening = re.sub(r"\[(?:nome|name)\]", customer_name or "o responsável", opening, flags=re.IGNORECASE)
-        opening = re.sub(r"\s{2,}", " ", opening).strip()
+        has_name_placeholder = bool(name_placeholder.search(opening))
+        replacement_name = customer_name if has_customer_name else "o responsável"
+        opening = name_placeholder.sub(lambda _: replacement_name, opening)
+        opening = re.sub(r"\\s{2,}", " ", opening).strip()
+        if has_customer_name and not has_name_placeholder:
+            opening = _add_customer_name_to_opening(opening, customer_name)
         # The campaign opening already introduces Ricardo; do not prepend a
         # second introduction or replace the customer-configured approach.
         if "assistente virtual" in opening.casefold():
             return opening
 
     if opening:
-        opening = re.sub(r"\[(?:nome|name)\]", customer_name, opening, flags=re.IGNORECASE)
-        opening = re.sub(r"\s{2,}", " ", opening).strip()
+        opening = name_placeholder.sub(
+            lambda _: customer_name if has_customer_name else "",
+            opening,
+        )
+        opening = re.sub(r"\\s{2,}", " ", opening).strip()
+        greeting_name = name_part
+        if has_customer_name and customer_name.casefold() in opening.casefold():
+            greeting_name = ""
         who = f" da {company}" if company else ""
-        return f"Olá. Sou o {agent_name}, assistente virtual de IA{who}. {opening}"
+        return f"Olá{greeting_name}. Sou o {agent_name}, assistente virtual de IA{who}. {opening}"
 
     who = f" da {company}" if company else ""
     return (
         f"Olá{name_part}. Sou o {agent_name}, assistente virtual de IA{who}. "
         "Posso falar consigo por um momento?"
     )
-
 
 class LuminAgent(Agent):
     def __init__(
