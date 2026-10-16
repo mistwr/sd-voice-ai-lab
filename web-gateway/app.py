@@ -703,6 +703,15 @@ def _apply_sd_vodafone_script(
         return profile
 
     opening = opening_match.group(1).strip().strip('"“” ')
+    first_question_match = re.search(
+        r'(?im)^\s*1\.\s*ª\s*Pergunta[^\n]*\n\s*["“]?([^"”\n]+)',
+        content,
+    )
+    if first_question_match:
+        first_question = first_question_match.group(1).strip().strip('"“” ')
+        if first_question and first_question.casefold() not in opening.casefold():
+            opening = f"{opening.rstrip()} {first_question}".strip()
+
     # The caller name always comes from the selected/manual lead context.
     opening = re.sub(
         r"\bRicardo(?:\s+José)?(?:\s+Santos)?\b",
@@ -721,7 +730,7 @@ def _apply_sd_vodafone_script(
 
     script_title = str(script.get("titulo") or "Vodafone").strip()[:120]
     profile.update({
-        "scriptVersion": 9,
+        "scriptVersion": 10,
         "campaignSegment": "VODAFONE",
         "description": "Agente de voz da Compara+ a testar o guião Vodafone.",
         "objective": "Seguir o guião Vodafone ativo do Super Admin, qualificar o pacote atual e encaminhar o contacto para um especialista.",
@@ -731,6 +740,8 @@ def _apply_sd_vodafone_script(
             f"GUIÃO ATIVO DO SUPER ADMIN — {script_title}\n"
             f"{content}\n\n"
             "Segue as perguntas do guião pela ordem, uma de cada vez, sem repetir respostas já dadas. "
+            "A pergunta sobre operadora e valor já foi feita no fim da abertura: aguarda a resposta e não a repitas. "
+            "No contexto dessa pergunta, interpreta uma resposta com som semelhante a MEO, incluindo transcrições como meu, mei ou mel, como MEO; não peças confirmação só por essa variação. "
             "Usa apenas o nome da lead selecionada ou do campo manual; nunca uses o nome escrito no exemplo. "
             "Não perguntes por consentimento para gravar, transcrever ou guardar contacto. "
             "Se a pessoa aceitar o contacto de um especialista e não indicar um dia, pergunta só o dia preferido; "
