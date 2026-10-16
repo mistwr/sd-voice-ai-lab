@@ -421,6 +421,10 @@ async def _run_outbound_call(
                 "callId": call_id,
                 "phone": phone,
                 "name": name,
+                "source": state.get("source", "lumin-call-api"),
+                "leadId": state.get("leadId"),
+                "companyId": state.get("companyId"),
+                "requestedBy": state.get("sdUserId"),
             }
             if agent_profile:
                 common_metadata["agentProfile"] = agent_profile
@@ -526,6 +530,7 @@ def _queue_call(
     name: str,
     agent_profile: dict[str, Any] | None = None,
     source: str = "lumin-call-api",
+    call_context: dict[str, Any] | None = None,
 ):
     global _LAST_CALL_AT
 
@@ -534,7 +539,7 @@ def _queue_call(
         raise HTTPException(status_code=429, detail="Wait a moment before starting another call")
     _LAST_CALL_AT = now
 
-    call_id = uuid.uuid4().hex[:12]
+    call_id = str(uuid.uuid4())
     room_name = f"lumin-call-{call_id}"
     _CALLS[call_id] = {
         "callId": call_id,
@@ -545,6 +550,7 @@ def _queue_call(
         "createdAt": time.time(),
         "agent": agent_profile or {},
         "source": source,
+        **(call_context or {}),
     }
     asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile))
     return _CALLS[call_id]
@@ -717,13 +723,14 @@ async def sd_dialer_call(
         lead_name,
         agent_profile,
         source="sd-dialer-manual" if is_manual else "sd-dialer",
+        call_context={
+            "sdUserId": user_id,
+            "companyId": str(profile["company_id"]),
+            "leadId": lead_id,
+            "manualNumber": is_manual,
+            "manualConsentConfirmed": is_manual,
+        },
     )
-    state["sdUserId"] = user_id
-    if lead_id:
-        state["leadId"] = lead_id
-    if is_manual:
-        state["manualNumber"] = True
-        state["manualConsentConfirmed"] = True
     return {
         "ok": True,
         "callId": state["callId"],

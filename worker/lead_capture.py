@@ -73,10 +73,18 @@ def _asks_for_name(text: str) -> bool:
 
 def _asks_for_consent(text: str) -> bool:
     folded = _fold(text)
+    # Só iniciar a captura de contacto quando o agente pedir explicitamente
+    # autorização para guardar o nome e o número no sistema comercial.
     return bool(
-        re.search(r"\bposso (?:guardar|registar|anotar)\b", folded)
-        or re.search(r"\bautoriza (?:que )?(?:guardemos|registemos|anotemos)\b", folded)
-        or re.search(r"\bconsente (?:que )?(?:guardemos|registemos|anotemos)\b", folded)
+        re.search(r"\bposso guardar o seu nome e este numero no nosso sistema comercial\b", folded)
+        or re.search(
+            r"\bautoriza (?:que )?(?:guardemos|registemos|anotemos) o seu nome e este numero\b",
+            folded,
+        )
+        or re.search(
+            r"\bconsente (?:que )?(?:guardemos|registemos|anotemos) o seu nome e este numero\b",
+            folded,
+        )
     )
 
 

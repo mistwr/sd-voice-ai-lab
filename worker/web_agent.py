@@ -7,10 +7,12 @@ WebRTC/SIP -> Deepgram STT -> GPT-5.6 Luna -> selectable neural PT-PT / Piper ->
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -21,10 +23,12 @@ from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
 from openvoice_tts import OpenVoiceRemoteTTS
 from piper_catalog_tts import PiperCatalogRemoteTTS
-from lead_capture import LeadCapture, lead_capture_instructions
+from lead_capture import LeadCapture, _consent_answer, lead_capture_instructions
 
 load_dotenv(".env.local")
 load_dotenv()
+
+from supabase_client import SupabaseLogger
 
 logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
@@ -273,25 +277,76 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     )
 
 
+def transcript_consent_question(retention_days: int = 90) -> str:
+    return (
+        "Posso guardar uma transcrição em texto desta chamada no SD Dialer "
+        f"por até {retention_days} dias, para consulta da equipa? "
+        "Se preferir, continuamos sem a guardar."
+    )
+
+TRANSCRIPT_CONSENT_INSTRUCTIONS = """
+
+AUTORIZAÇÃO PARA GUARDAR A TRANSCRIÇÃO
+- Nas chamadas do SD Dialer, faz primeiro a pergunta de autorização que já foi dita na abertura.
+- Só guarda qualquer texto da conversa depois de uma resposta afirmativa clara a essa pergunta específica.
+- Se a pessoa recusar, agradece e continua a chamada sem guardar a conversa. Não voltes a pedir autorização.
+- Se a resposta for ambígua, explica uma vez que se trata apenas de uma transcrição em texto para consulta da equipa e pergunta novamente. Se continuar incerta, prossegue sem guardar.
+- Não confundas a autorização para guardar a transcrição com a autorização para guardar contactos ou voltar a ligar.
+- Não existe gravação de áudio nesta chamada; nunca digas que o áudio será guardado.
+"""
+
+def build_transcript_consent_greeting(
+    profile: dict[str, Any] | None,
+    customer_name: str = "",
+    retention_days: int = 90,
+) -> str:
+    profile = _campaign_profile(profile)
+    agent_name = _clean(profile.get("name"), 80) or "Lumin"
+    company = _clean(profile.get("company"), 120)
+    customer_name = _clean(customer_name, 100)
+    has_customer_name = bool(
+        customer_name and customer_name.casefold() not in {"cliente", "contacto manual"}
+    )
+    name_part = f", {customer_name}" if has_customer_name else ""
+    company_part = f" da {company}" if company else ""
+    return (
+        f"Olá{name_part}. Sou o {agent_name}, assistente virtual de IA{company_part}. "
+        "Esta chamada não é gravada em áudio. "
+        f"{transcript_consent_question(retention_days)}"
+    )
+
+
 class LuminAgent(Agent):
     def __init__(
         self,
         profile: dict[str, Any] | None = None,
         customer_name: str = "",
         capture_phone_lead: bool = False,
+        transcript_consent_required: bool = False,
+        transcript_retention_days: int = 90,
     ) -> None:
         self._profile = profile or {}
         self._customer_name = customer_name
+        self._transcript_consent_required = transcript_consent_required
+        self._transcript_retention_days = transcript_retention_days
         instructions = build_instructions(self._profile)
         if capture_phone_lead:
             instructions += lead_capture_instructions()
+        if transcript_consent_required:
+            instructions += TRANSCRIPT_CONSENT_INSTRUCTIONS
         super().__init__(instructions=instructions)
 
     async def on_enter(self):
-        await self.session.say(
-            build_greeting(self._profile, self._customer_name),
-            allow_interruptions=True,
+        greeting = (
+            build_transcript_consent_greeting(
+                self._profile,
+                self._customer_name,
+                self._transcript_retention_days,
+            )
+            if self._transcript_consent_required
+            else build_greeting(self._profile, self._customer_name)
         )
+        await self.session.say(greeting, allow_interruptions=True)
 
 
 async def entrypoint(ctx: JobContext):
@@ -303,7 +358,46 @@ async def entrypoint(ctx: JobContext):
 
     profile = metadata.get("agentProfile") or {}
     customer_name = _clean(metadata.get("name"), 100)
+    source = _clean(metadata.get("source"), 80).lower().replace("_", "-")
+    is_sd_dialer_call = source in {"sd-dialer", "sd-dialer-manual"}
+    call_id = _clean(metadata.get("callId") or metadata.get("call_id"), 80)
+    company_id = _clean(metadata.get("companyId") or metadata.get("company_id"), 80)
+    requested_by = _clean(metadata.get("requestedBy") or metadata.get("requested_by"), 80)
     lead_capture = LeadCapture.from_job(metadata)
+    voice_call_logger: SupabaseLogger | None = None
+    transcript_consent_state = {
+        "value": "unavailable" if is_sd_dialer_call else "not_requested",
+        "ambiguous_answers": 0,
+        "clarification_explained": False,
+        "clarification_prompted": False,
+    }
+    transcript_retention_days = 90
+    call_started_at = datetime.now(timezone.utc)
+
+    if is_sd_dialer_call and call_id and company_id:
+        try:
+            candidate_logger = SupabaseLogger()
+            created = await candidate_logger.create_voice_call(
+                call_id=call_id,
+                company_id=company_id,
+                phone_number=_clean(metadata.get("phone"), 80),
+                client_name=customer_name,
+                created_by=requested_by or None,
+                lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80) or None,
+                livekit_room=ctx.room.name,
+                source=source,
+            )
+            if created:
+                voice_call_logger = candidate_logger
+                transcript_consent_state["value"] = "pending"
+                transcript_retention_days = await voice_call_logger.cleanup_expired_transcripts(company_id)
+            else:
+                await candidate_logger.close()
+        except Exception as exc:
+            logger.warning(
+                "SD Dialer call history unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
 
     logger.info(
         "voice session started",
@@ -455,31 +549,149 @@ async def entrypoint(ctx: JobContext):
             extra={k: v for k, v in values.items() if v is not None},
         )
 
+    transcript_tasks: set[asyncio.Task[Any]] = set()
+    transcript_lock = asyncio.Lock()
+
+    async def _persist_sd_dialer_transcript(role: Any, text_value: str) -> None:
+        if voice_call_logger is None or not call_id or not company_id:
+            return
+
+        async with transcript_lock:
+            state = transcript_consent_state["value"]
+            role_name = _clean(role, 40).lower()
+
+            if state == "pending":
+                if role_name in {"assistant", "agent"}:
+                    if transcript_consent_state["ambiguous_answers"] == 1:
+                        normalized = text_value.casefold()
+                        initial_question = transcript_consent_question(transcript_retention_days).casefold()
+                        if initial_question in normalized:
+                            return
+                        has_transcript_context = (
+                            "transcrição" in normalized
+                            or "transcricao" in normalized
+                            or "texto" in normalized
+                        )
+                        has_storage_action = "guardar" in normalized or "registar" in normalized
+                        if has_transcript_context and has_storage_action:
+                            transcript_consent_state["clarification_explained"] = True
+                        if transcript_consent_state["clarification_explained"] and "?" in text_value:
+                            transcript_consent_state["clarification_prompted"] = True
+                    return
+
+                if role_name not in {"user", "human"}:
+                    return
+
+                answer = _consent_answer(text_value)
+                if answer == "no":
+                    transcript_consent_state["value"] = "denied"
+                    await voice_call_logger.update_call(
+                        call_id,
+                        transcript_consent_status="denied",
+                    )
+                    return
+                if answer is None:
+                    if transcript_consent_state["ambiguous_answers"] == 0:
+                        transcript_consent_state["ambiguous_answers"] = 1
+                    else:
+                        transcript_consent_state["value"] = "not_confirmed"
+                    return
+                if answer != "yes":
+                    return
+                if (
+                    transcript_consent_state["ambiguous_answers"] > 0
+                    and not transcript_consent_state["clarification_prompted"]
+                ):
+                    transcript_consent_state["value"] = "not_confirmed"
+                    return
+
+                consent_at = datetime.now(timezone.utc)
+                updated = await voice_call_logger.update_call(
+                    call_id,
+                    transcript_consent_status="granted",
+                    transcript_consent_at=consent_at.isoformat(),
+                )
+                if not updated:
+                    transcript_consent_state["value"] = "unavailable"
+                    return
+                transcript_consent_state["value"] = "granted"
+                await voice_call_logger.log_transcript(
+                    call_id,
+                    "agent",
+                    transcript_consent_question(transcript_retention_days),
+                    company_id=company_id,
+                )
+                await voice_call_logger.log_transcript(
+                    call_id,
+                    "client",
+                    text_value,
+                    company_id=company_id,
+                )
+                return
+
+            if state != "granted":
+                return
+
+            speaker = (
+                "client" if role_name in {"user", "human"}
+                else "agent" if role_name in {"assistant", "agent"}
+                else ""
+            )
+            if speaker:
+                if speaker == "agent" and "posso guardar uma transcrição em texto" in text_value.casefold():
+                    return
+                await voice_call_logger.log_transcript(
+                    call_id,
+                    speaker,
+                    text_value,
+                    company_id=company_id,
+                )
+
     @session.on("conversation_item_added")
     def _log_conversation(ev):
         item = ev.item
-        text_value = getattr(item, "text_content", None) or ""
+        text_value = _clean(getattr(item, "text_content", None) or "", 4000)
         role = getattr(item, "role", "unknown")
         if text_value:
             if lead_capture is not None:
                 lead_capture.observe(role, text_value)
+            if is_sd_dialer_call and voice_call_logger is not None:
+                task = asyncio.create_task(_persist_sd_dialer_transcript(role, text_value))
+                transcript_tasks.add(task)
+                task.add_done_callback(transcript_tasks.discard)
             # Keep operational diagnostics without retaining customer transcripts in logs.
             logger.info(
                 "conversation_item",
                 extra={"role": role, "text_length": len(text_value)},
             )
 
-    if lead_capture is not None:
-        async def _sync_lead_after_call() -> None:
+    async def _finalize_call() -> None:
+        if transcript_tasks:
+            await asyncio.gather(*tuple(transcript_tasks), return_exceptions=True)
+        if lead_capture is not None:
             await lead_capture.register()
+        if voice_call_logger is not None:
+            ended_at = datetime.now(timezone.utc)
+            duration_seconds = max(0, int((ended_at - call_started_at).total_seconds()))
+            await voice_call_logger.update_call(
+                call_id,
+                status="answered",
+                ended_at=ended_at.isoformat(),
+                duration_seconds=duration_seconds,
+            )
+            await voice_call_logger.close()
 
-        ctx.add_shutdown_callback(_sync_lead_after_call)
+    ctx.add_shutdown_callback(_finalize_call)
 
     await session.start(
         agent=LuminAgent(
             profile if isinstance(profile, dict) else {},
             customer_name=customer_name,
             capture_phone_lead=lead_capture is not None,
+            transcript_consent_required=bool(
+                is_sd_dialer_call and voice_call_logger is not None
+            ),
+            transcript_retention_days=transcript_retention_days,
         ),
         room=ctx.room,
     )
