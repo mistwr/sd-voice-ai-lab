@@ -586,7 +586,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT(
             "deepgram/nova-3",
             language="pt",
-            keyterm=["MEO", "NOS", "Vodafone", "DIGI"],
         ),
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
