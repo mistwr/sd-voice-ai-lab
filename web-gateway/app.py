@@ -368,6 +368,8 @@ def _sd_agent_profile(agent_id: str, company_name: str) -> dict[str, Any]:
     return {
         "id": "lumin-telecom",
         "name": "Lumin",
+        "voice": "natural",
+        "voiceEngine": "xai",
         "company": "Compara+",
         "objective": "Perceber a necessidade principal e, havendo interesse, agendar um contacto com um consultor para comparar opções de internet e televisão.",
         "product": "A Compara+ compara opções residenciais de internet e televisão. Não inventes preços, cobertura, poupanças ou condições. Ouve a necessidade concreta e oferece uma comparação com um consultor, sem compromisso.",
