@@ -24,10 +24,11 @@ from kokoro_remote_tts import KokoroRemoteTTS
 from openvoice_tts import OpenVoiceRemoteTTS
 from piper_catalog_tts import PiperCatalogRemoteTTS
 from lead_capture import LeadCapture, _consent_answer, lead_capture_instructions
-from supabase_client import SupabaseLogger
 
 load_dotenv(".env.local")
 load_dotenv()
+
+from supabase_client import SupabaseLogger
 
 logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
@@ -364,7 +365,12 @@ async def entrypoint(ctx: JobContext):
     requested_by = _clean(metadata.get("requestedBy") or metadata.get("requested_by"), 80)
     lead_capture = LeadCapture.from_job(metadata)
     voice_call_logger: SupabaseLogger | None = None
-    transcript_consent_state = {"value": "unavailable" if is_sd_dialer_call else "not_requested"}
+    transcript_consent_state = {
+        "value": "unavailable" if is_sd_dialer_call else "not_requested",
+        "ambiguous_answers": 0,
+        "clarification_explained": False,
+        "clarification_prompted": False,
+    }
     transcript_retention_days = 90
     call_started_at = datetime.now(timezone.utc)
 
@@ -555,8 +561,27 @@ async def entrypoint(ctx: JobContext):
             role_name = _clean(role, 40).lower()
 
             if state == "pending":
+                if role_name in {"assistant", "agent"}:
+                    if transcript_consent_state["ambiguous_answers"] == 1:
+                        normalized = text_value.casefold()
+                        initial_question = transcript_consent_question(transcript_retention_days).casefold()
+                        if initial_question in normalized:
+                            return
+                        has_transcript_context = (
+                            "transcrição" in normalized
+                            or "transcricao" in normalized
+                            or "texto" in normalized
+                        )
+                        has_storage_action = "guardar" in normalized or "registar" in normalized
+                        if has_transcript_context and has_storage_action:
+                            transcript_consent_state["clarification_explained"] = True
+                        if transcript_consent_state["clarification_explained"] and "?" in text_value:
+                            transcript_consent_state["clarification_prompted"] = True
+                    return
+
                 if role_name not in {"user", "human"}:
                     return
+
                 answer = _consent_answer(text_value)
                 if answer == "no":
                     transcript_consent_state["value"] = "denied"
@@ -565,7 +590,19 @@ async def entrypoint(ctx: JobContext):
                         transcript_consent_status="denied",
                     )
                     return
+                if answer is None:
+                    if transcript_consent_state["ambiguous_answers"] == 0:
+                        transcript_consent_state["ambiguous_answers"] = 1
+                    else:
+                        transcript_consent_state["value"] = "not_confirmed"
+                    return
                 if answer != "yes":
+                    return
+                if (
+                    transcript_consent_state["ambiguous_answers"] > 0
+                    and not transcript_consent_state["clarification_prompted"]
+                ):
+                    transcript_consent_state["value"] = "not_confirmed"
                     return
 
                 consent_at = datetime.now(timezone.utc)
