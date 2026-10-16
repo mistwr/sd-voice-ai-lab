@@ -141,7 +141,7 @@ class LeadCapture:
             return None
         mode = _clean(metadata.get("mode"), 40).lower()
         source = _clean(metadata.get("source"), 80).lower().replace("_", "-")
-        if mode != "outbound" or source in {"sd-dialer", "sd dialer"}:
+        if mode != "outbound" or source in {"sd-dialer", "sd-dialer-manual"}:
             return None
         call_id = _clean(metadata.get("callId") or metadata.get("call_id"), 128)
         phone = _clean(metadata.get("phone"), 80)
