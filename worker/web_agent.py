@@ -12,11 +12,12 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, TurnHandlingOptions, WorkerOptions, cli, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference
 
 from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
@@ -95,18 +96,19 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
-# Restore the full campaign script for the short v1-v4 profiles already saved
-# in browsers. Newer profiles retain subsequent edits made by the customer.
-COMPARA_SCRIPT_VERSION = 5
+# Keep the Compara+ call short and focused. The gateway currently sends
+# profiles without scriptVersion, so this canonical script also replaces stale
+# scripts saved in the browser.
+COMPARA_SCRIPT_VERSION = 6
 COMPARA_RESTORED_SCRIPT = {
-    "description": "Ricardo Salgado é o assistente virtual de IA da Compara + para qualificar contactos sobre telecomunicações residenciais. Fala português de Portugal, é cordial e conciso, faz uma pergunta de cada vez e respeita recusas. Usa apenas informação confirmada na campanha.",
-    "objective": "Qualificar contactos para comparação de telecomunicações: confirmar titularidade, operadora, satisfação, fidelização, tecnologia, localidade e mensalidade; confirmar interesse e registar preferência de contacto por um consultor humano quando aplicável. Seguir o guião e terminar perante uma condição de paragem.",
-    "opening": "Boa tarde! Estou a falar com o/a Sr./Sra. [nome]? Sou o Ricardo Salgado, assistente virtual de IA da Compara +. É consigo que devo falar sobre os serviços de internet e televisão da sua casa? Queria fazer-lhe algumas perguntas rápidas para perceber se vale a pena comparar as opções disponíveis.",
-    "product": "Qualificação para comparar serviços residenciais de internet e televisão. Registar operadora (NOS, MEO, Vodafone, DIGI, NOWO, UZO, WOO, nenhuma ou desconhecida), satisfação e problema (velocidade, falhas, preço, Wi-Fi ou outro), tecnologia (fibra, ADSL, cabo, satélite ou desconhecida), localidade/concelho e mensalidade ou desconhecida. Se só usar telemóvel e não tiver interesse em internet fixa, agradecer e terminar.",
-    "offer": "Propor análise das opções disponíveis para a morada, incluindo NOS, MEO e Vodafone quando aplicável. A comparação não obriga a mudar. Não prometer poupança, cobertura, preços ou disponibilidade. Confirmar interesse e, se quiser avançar, registar preferência de contacto por um consultor humano. Não fechar contrato nem afirmar que uma marca é a melhor sem confirmação.",
-    "objections": "NÃO INTERESSADO: agradecer e terminar, sem insistir. NÃO QUERO MUDAR: explicar uma vez que comparar não obriga a mudar; perguntar se quer conhecer as opções e, se voltar a recusar, terminar. NÃO SOU TITULAR / SENHORIO: agradecer, registar e terminar; não pedir dados de outra pessoa. ORIGEM DO CONTACTO: indicar apenas a origem registada na campanha; se não existir, não inventar e registar para revisão. FIDELIZAÇÃO >3 MESES: registar mês/ano; propor contacto mais perto do fim apenas se aceitar e terminar. RECUSA DE RESPOSTA: agradecer e terminar. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirmar que vai registar o pedido, aplicar a exclusão e terminar imediatamente.",
-    "notes": "ORDEM DO GUIÃO: 1) Confirmar nome e se é titular/responsável pelas telecomunicações da casa. Se não, se o senhorio trata do serviço, pessoa errada, recusa ou pedido de fim: registar resultado e terminar. 2) Perguntar operadora. Se não tiver serviço fixo, perguntar se usa apenas telemóvel ou teria interesse em internet fixa; sem interesse, terminar. 3) Perguntar satisfação com internet; se parcial/insatisfeito, identificar velocidade, falhas, Wi-Fi, preço ou outro. Uma pergunta de cada vez. 4) Perguntar mês/ano do fim da fidelização. Já terminou ou faltam até 3 meses: continuar. Faltam mais de 3 meses: propor contacto mais perto, só se aceitar, e terminar. Se desconhecida, perguntar data aproximada de instalação/alteração e registar como estimativa; nunca presumir uma data contratual ou fidelização de 24 meses. 5) Perguntar tecnologia: fibra; se não, cabo, ADSL ou satélite; se não souber, registar desconhecida. 6) Perguntar localidade; concelho só se necessário. Se recusar, terminar. 7) Perguntar quanto paga por mês; se não souber, registar desconhecida; se recusar, agradecer e terminar. 8) Apresentar comparação sem prometer cobertura, poupança ou preço. Se não tiver interesse, terminar. Se não quiser mudar, esclarecer uma vez que comparar não obriga a mudar; terminar se mantiver a recusa. 9) Se houver interesse, perguntar preferência de período (manhã/tarde) e dia/hora para contacto humano. Registar a preferência; não dizer que ficou agendado sem confirmação de disponibilidade. 10) Depois da chamada, resumir: operadora, titularidade, satisfação/problema, tecnologia, localidade, mensalidade, fidelização/data e se estimada, interesse, preferência de contacto, origem, resultado e pedido de exclusão. Não ler o relatório em voz alta. Nunca inventar dados, preços, cobertura, datas ou origem; nunca insistir após uma recusa. CONTINUIDADE: depois de cada resposta do cliente, reconhece brevemente e passa à próxima pergunta necessária do guião. Um sim à abertura significa continuar para a operadora; não é uma condição de fim. Não repitas perguntas já respondidas.",
-    "tone": "Português de Portugal; voz natural, cordial e clara, ritmo moderado, frases curtas, uma pergunta de cada vez. Sem pressão, urgência falsa ou leitura mecânica."
+    "description": "Ricardo Salgado é o assistente virtual de IA da Compara+. Fala português de Portugal com naturalidade, vai direto ao assunto e fecha o próximo passo sem prolongar a chamada.",
+    "objective": "Conseguir interesse numa comparação de internet e televisão e, havendo interesse, marcar na agenda uma chamada de um consultor humano.",
+    "opening": "Boa tarde, [nome]. Sou o Ricardo, assistente virtual de IA da Compara+. Vou ser direto: quer receber uma comparação das opções de internet e televisão para sua casa?",
+    "product": "A Compara+ compara opções de internet e televisão. Não inventes preços, cobertura, poupanças ou condições. Faz apenas a pergunta de interesse da abertura e, se a pessoa aceitar falar com um consultor, pergunta o dia e a hora para o contacto. Não faças um questionário.",
+    "offer": "Se houver interesse, oferece um contacto de um consultor para apresentar as opções. Só confirma a marcação depois de schedule_follow_up devolver sucesso. Não prometas uma poupança, preço, cobertura ou mudança de operador.",
+    "objections": "RECUSA CLARA: agradece e termina sem insistir. SATISFEITO COM O SERVIÇO: reconhece e oferece uma vez uma comparação sem compromisso; se não quiser, termina. NÃO É A PESSOA / NÃO TRATA DO SERVIÇO: agradece e termina sem procurar outra pessoa. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirma brevemente e termina.",
+    "notes": """GUIÃO DIRETO: 1) Usa apenas o nome recebido da lead ou do campo manual. Não procures nem importes o nome de outra lead. Não perguntes o nome, se é titular, operadora, fidelização, preço, morada, tecnologia, email ou se podes guardar contacto. 2) A abertura já pergunta se tem interesse numa comparação; aproveita a resposta e não repitas a pergunta. Se aceitar, pergunta só: "Qual o melhor dia e hora para um consultor lhe ligar?" 3) Se disser um dia mas não uma hora, pergunta apenas a hora. Não peças uma segunda confirmação quando a data e hora já forem claras. 4) Depois de a pessoa aceitar o contacto e indicar um dia e hora concretos, chama schedule_follow_up com a data/hora em ISO 8601 e fuso Europe/Lisbon. Só depois do resultado de sucesso diz que ficou marcado. Se o registo falhar, não prometas que está marcado. 5) Se recusar ou não mostrar interesse, agradece e termina. Sem perguntas de autorização para gravação, transcrição, guardar dados ou voltar a contactar: a autorização já consta da campanha. Fala como numa conversa breve, não recites passos nem confirmes cada resposta com "certo" ou "percebo".""",
+    "tone": "Português de Portugal, direto, próximo e calmo. Frases curtas e espontâneas; sem tom de questionário, sem confirmações automáticas e sem insistência."
 }
 
 
@@ -125,7 +127,11 @@ def _campaign_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
     return profile
 
 
-def build_instructions(profile: dict[str, Any] | None = None) -> str:
+def build_instructions(
+    profile: dict[str, Any] | None = None,
+    follow_up_enabled: bool = False,
+    current_local_time: str = "",
+) -> str:
     profile = _campaign_profile(profile)
 
     base = """
@@ -137,15 +143,14 @@ REGRAS GERAIS
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Guarda mentalmente os dados já respondidos. Não perguntes outra vez algo que já foi fornecido ou esteja explícito no contexto; aproveita respostas que cubram várias perguntas.
 - Faz apenas a pergunta seguinte necessária, uma de cada vez. Se a resposta for ambígua, esclarece uma única vez com palavras diferentes; se continuar incerta, regista-a como desconhecida e avança, salvo se for indispensável para continuar.
-- Evita ciclos: não repitas a abertura, explicação, pergunta, resumo ou confirmação. Confirma brevemente só quando isso acrescentar naturalidade; não comeces todas as respostas da mesma maneira.
+- Evita ciclos: não repitas a abertura, explicação, pergunta, resumo ou confirmação. Responde ao que a pessoa disse, sem acrescentar frases de confirmação automáticas.
 - Usa respostas curtas, normalmente uma ou duas frases, e faz uma pergunta de cada vez.
-- Em conversa normal, tenta não passar de cerca de vinte palavras antes de devolver a vez à pessoa. Só alonga quando a pessoa pedir explicação.
 - Começa pela resposta útil, sem introduções desnecessárias.
 - Faz pausas naturais entre ideias. Prefere frases curtas com pontos finais claros, em vez de uma frase longa.
-- Não enchas silêncio com texto. Uma confirmação curta seguida de uma pergunta é melhor do que um parágrafo.
+- Não enchas silêncio com texto. Uma resposta direta é melhor do que um parágrafo.
 - Se a pessoa disser apenas "sim", "não", "espere", "certo" ou equivalente, reage imediatamente ao significado dessa palavra.
 - Se tiveres muita informação, divide-a por várias intervenções em vez de despejar tudo numa resposta.
-- Depois de a pessoa responder, quando soar natural usa uma confirmação muito curta como frase independente, por exemplo "Certo.", "Entendo.", "Faz sentido." ou "Percebo.". Varia e não comeces todas as respostas da mesma maneira.
+- Não confirmes automaticamente cada resposta com "certo", "entendo" ou "percebo". Responde ao conteúdo e segue apenas quando houver uma pergunta necessária.
 - Fala como numa conversa real: não recites o guião, não repitas a pergunta do cliente e evita frases demasiado perfeitas ou formais.
 - Deixa a pessoa terminar a ideia antes de responder.
 - Ouve mais do que falas. Se fores interrompido de forma clara, pára e ouve.
@@ -208,13 +213,24 @@ Segue esta lógica de venda consultiva:
 9. Mantém o controlo da conversa com perguntas, mas sem pressão enganosa, urgência falsa ou insistência após uma recusa clara.
 """
 
-    return base + sales_mode + """
+    result = base + sales_mode + """
 
 CONTEXTO DESTA EMPRESA
 Usa apenas a informação abaixo como contexto comercial autorizado.
 Se algum dado não estiver aqui ou não tiveres a certeza, não inventes.
 
 """ + context
+    if follow_up_enabled:
+        result += f"""
+
+MARCAÇÃO NA AGENDA DO SD DIALER
+Hora local atual em Lisboa: {current_local_time}.
+Se a pessoa aceitar claramente o contacto de um consultor, pergunta apenas pelo melhor dia e hora.
+Quando a pessoa indicar uma data e hora específicas, chama schedule_follow_up uma única vez com scheduled_at em ISO 8601 e fuso Europe/Lisbon.
+Não perguntes se pode guardar dados ou voltar a ligar; a autorização já está registada.
+Só afirmes que a chamada ficou marcada se a ferramenta confirmar sucesso. Se faltar apenas a hora, pergunta só a hora.
+"""
+    return result
 
 
 def _add_customer_name_to_opening(opening: str, customer_name: str) -> str:
@@ -283,13 +299,90 @@ class LuminAgent(Agent):
         profile: dict[str, Any] | None = None,
         customer_name: str = "",
         capture_phone_lead: bool = False,
+        follow_up_logger: SupabaseLogger | None = None,
+        follow_up_call_id: str = "",
+        follow_up_lead_id: str = "",
+        follow_up_company_id: str = "",
+        follow_up_requested_by: str = "",
     ) -> None:
         self._profile = profile or {}
         self._customer_name = customer_name
-        instructions = build_instructions(self._profile)
+        self._follow_up_logger = follow_up_logger
+        self._follow_up_call_id = follow_up_call_id
+        self._follow_up_lead_id = follow_up_lead_id
+        self._follow_up_company_id = follow_up_company_id
+        self._follow_up_requested_by = follow_up_requested_by
+        self._follow_up_lock = asyncio.Lock()
+        self._follow_up_confirmation = ""
+
+        follow_up_enabled = bool(
+            follow_up_logger
+            and follow_up_call_id
+            and follow_up_lead_id
+            and follow_up_company_id
+            and follow_up_requested_by
+        )
+        current_local_time = datetime.now(ZoneInfo("Europe/Lisbon")).isoformat(timespec="minutes")
+        instructions = build_instructions(
+            self._profile,
+            follow_up_enabled=follow_up_enabled,
+            current_local_time=current_local_time,
+        )
         if capture_phone_lead:
             instructions += lead_capture_instructions()
-        super().__init__(instructions=instructions)
+        super().__init__(
+            instructions=instructions,
+            tools=[self.schedule_follow_up] if follow_up_enabled else [],
+        )
+
+    @function_tool()
+    async def schedule_follow_up(self, context: RunContext, scheduled_at: str) -> str:
+        """Marca uma chamada de seguimento na agenda do SD Dialer.
+
+        Args:
+            scheduled_at: Data e hora acordadas com a pessoa, em ISO 8601 com fuso Europe/Lisbon.
+        """
+        if not self._follow_up_logger:
+            return "Não foi possível confirmar a marcação na agenda. Não digas que ficou marcada."
+
+        raw_datetime = _clean(scheduled_at, 80)
+        try:
+            parsed = datetime.fromisoformat(raw_datetime.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Lisbon"))
+            local_datetime = parsed.astimezone(ZoneInfo("Europe/Lisbon"))
+            utc_datetime = local_datetime.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return "Data ou hora inválida. Pede apenas que a pessoa esclareça a data ou hora."
+
+        now = datetime.now(timezone.utc)
+        if utc_datetime <= now + timedelta(minutes=2):
+            return "A data/hora já passou ou é demasiado próxima para garantir a chamada. Não digas que ficou marcada; pede outro horário."
+        if utc_datetime > now + timedelta(days=180):
+            return "A data indicada está demasiado distante para confirmar. Pede um dia mais próximo."
+
+        async with self._follow_up_lock:
+            if self._follow_up_confirmation:
+                return self._follow_up_confirmation
+            created = await self._follow_up_logger.create_follow_up(
+                call_id=self._follow_up_call_id,
+                lead_id=self._follow_up_lead_id,
+                partner_id=self._follow_up_requested_by,
+                company_id=self._follow_up_company_id,
+                scheduled_at=local_datetime.isoformat(timespec="seconds"),
+                notes="Contacto solicitado durante chamada do assistente virtual.",
+            )
+            if not created:
+                return "Não consegui confirmar a marcação na agenda. Não digas que ficou marcada."
+
+            weekdays = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
+            months = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
+            self._follow_up_confirmation = (
+                f"Marcação confirmada para {weekdays[local_datetime.weekday()]}, "
+                f"{local_datetime.day} de {months[local_datetime.month - 1]}, "
+                f"às {local_datetime:%H:%M}, hora de Lisboa."
+            )
+            return self._follow_up_confirmation
 
     async def on_enter(self):
         await self.session.say(
@@ -552,6 +645,11 @@ async def entrypoint(ctx: JobContext):
             profile if isinstance(profile, dict) else {},
             customer_name=customer_name,
             capture_phone_lead=lead_capture is not None,
+            follow_up_logger=voice_call_logger if is_sd_dialer_call else None,
+            follow_up_call_id=call_id if is_sd_dialer_call else "",
+            follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
+            follow_up_company_id=company_id if is_sd_dialer_call else "",
+            follow_up_requested_by=requested_by if is_sd_dialer_call else "",
         ),
         room=ctx.room,
     )
