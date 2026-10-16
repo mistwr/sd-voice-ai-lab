@@ -695,7 +695,7 @@ def _apply_sd_vodafone_script(
 ) -> dict[str, Any]:
     content = str(script.get("conteudo") or "").strip()
     opening_match = re.search(
-        r"(?is)Abertura\\s*:\\s*(.+?)(?=\\n\\s*1\\.\\s*ª\\s*Pergunta\\b)",
+        r"(?is)Abertura\s*:\s*(.+?)(?=\n\s*1\.\s*ª\s*Pergunta\b)",
         content,
     )
     if not opening_match:
@@ -705,15 +705,15 @@ def _apply_sd_vodafone_script(
     opening = opening_match.group(1).strip().strip('"“” ')
     # The caller name always comes from the selected/manual lead context.
     opening = re.sub(
-        r"\\bRicardo(?:\\s+José)?(?:\\s+Santos)?\\b",
+        r"\bRicardo(?:\s+José)?(?:\s+Santos)?\b",
         "[nome]",
         opening,
         flags=re.IGNORECASE,
     )
     if "[nome]" not in opening.casefold():
         opening = re.sub(
-            r"^(Boa tarde)(?:,?\\s*)",
-            r"\\1, estou a falar com o Sr. [nome]? ",
+            r"^(Boa tarde)(?:,?\s*)",
+            r"\1, estou a falar com o Sr. [nome]? ",
             opening,
             count=1,
             flags=re.IGNORECASE,
@@ -728,8 +728,8 @@ def _apply_sd_vodafone_script(
         "offer": "Proposta Vodafone sem compromisso. Não inventes preços, cobertura, poupanças nem condições que não estejam configuradas.",
         "opening": opening[:800],
         "notes": (
-            f"GUIÃO ATIVO DO SUPER ADMIN — {script_title}\\n"
-            f"{content}\\n\\n"
+            f"GUIÃO ATIVO DO SUPER ADMIN — {script_title}\n"
+            f"{content}\n\n"
             "Segue as perguntas do guião pela ordem, uma de cada vez, sem repetir respostas já dadas. "
             "Usa apenas o nome da lead selecionada ou do campo manual; nunca uses o nome escrito no exemplo. "
             "Não perguntes por consentimento para gravar, transcrever ou guardar contacto. "
