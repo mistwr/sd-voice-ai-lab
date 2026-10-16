@@ -808,7 +808,7 @@ async def sd_dialer_call(
     }:
         raise HTTPException(status_code=409, detail="Lead bloqueada para nova chamada")
 
-    companies = await _sd_request_json(
+    company_request = _sd_request_json(
         "/rest/v1/companies",
         token,
         {
@@ -817,6 +817,18 @@ async def sd_dialer_call(
             "limit": "1",
         },
     )
+    active_script = None
+    if payload.agent_id == "lumin-telecom":
+        companies, active_script = await asyncio.gather(
+            company_request,
+            _sd_active_vodafone_script(
+                token,
+                str(profile.get("company_id") or ""),
+            ),
+        )
+    else:
+        companies = await company_request
+
     company_name = (
         str(companies[0].get("name") or "SD Dialer")
         if isinstance(companies, list) and companies
@@ -826,14 +838,8 @@ async def sd_dialer_call(
     agent_profile = _sd_agent_profile(payload.agent_id, company_name)
     if payload.agent is not None:
         agent_profile = _apply_sd_agent_overrides(agent_profile, payload.agent)
-
-    if payload.agent_id == "lumin-telecom":
-        active_script = await _sd_active_vodafone_script(
-            token,
-            str(profile.get("company_id") or ""),
-        )
-        if active_script:
-            agent_profile = _apply_sd_vodafone_script(agent_profile, active_script)
+    if active_script:
+        agent_profile = _apply_sd_vodafone_script(agent_profile, active_script)
 
     state = _queue_call(
         phone,
