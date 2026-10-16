@@ -96,8 +96,8 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
     return re.sub(r"^\[VOICE:(?:natural|clear|commercial)\]\s*", "", tone, flags=re.IGNORECASE)
 
 
-# Keep the Compara+ call short, personal and focused on booking a useful next step.
-COMPARA_SCRIPT_VERSION = 8
+# The gateway can pass a Super Admin campaign script for each call.
+COMPARA_SCRIPT_VERSION = 9
 COMPARA_RESTORED_SCRIPT = {
     "id": "lumin-telecom",
     "name": "Lumin",
@@ -232,6 +232,8 @@ Segue esta lógica de venda consultiva:
     elif profile_id == "lumin-telecom" or "compara" in company_name:
         sales_mode = """
 MODO COMERCIAL TELECOM COMPARA+
+- Se as notas incluírem um GUIÃO ATIVO DO SUPER ADMIN, segue as perguntas e o fecho pela ordem desse guião. Não acrescentes perguntas de outros guiões.
+- Usa o nome dinâmico da lead fornecida para a chamada; nunca leias um nome de exemplo como se fosse o nome real.
 - Aborda o pacote de telecomunicações como um todo: internet, televisão, telefone fixo, tarifários móveis e linhas incluídas. Não fales apenas da internet.
 - Usa o contexto da lead para começar. Se faltar informação, escolhe só a pergunta que ajuda a comparar: serviços incluídos, operadora atual ou prioridade principal. Pergunta pelo custo aproximado apenas se o preço for uma prioridade; pergunta o número de linhas apenas se os telemóveis forem relevantes.
 - Explica o valor do serviço: a comparação pode olhar para os serviços e custos em conjunto, e a equipa confirma a cobertura e as condições atuais. Não apresentes uma promessa vaga de poupança.
