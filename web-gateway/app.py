@@ -465,8 +465,16 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
         (row for row in rows if row.get("verification_status") == "pending"),
         None,
     )
+    active_requested_at = str((active or {}).get("requested_at") or "")
     failed = next(
-        (row for row in rows if row.get("verification_status") == "failed"),
+        (
+            row for row in rows
+            if row.get("verification_status") == "failed"
+            and (
+                not active_requested_at
+                or str(row.get("requested_at") or "") > active_requested_at
+            )
+        ),
         None,
     )
     return {
