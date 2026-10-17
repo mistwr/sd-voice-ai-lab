@@ -56,7 +56,11 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "")
 TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-LUMIN_GATEWAY_PUBLIC_URL = os.getenv("LUMIN_GATEWAY_PUBLIC_URL", "").rstrip("/")
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+LUMIN_GATEWAY_PUBLIC_URL = (
+    os.getenv("LUMIN_GATEWAY_PUBLIC_URL")
+    or (f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else "")
+).rstrip("/")
 
 logger = logging.getLogger("lumin-voice-gateway")
 logging.basicConfig(level=logging.INFO)
@@ -421,6 +425,18 @@ def _twilio_api_request(path: str, form: dict[str, str]) -> dict[str, Any]:
         )
 
 
+def _sd_caller_id_verification_configured() -> bool:
+    return bool(
+        SD_DIALER_SUPABASE_URL
+        and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY
+        and TWILIO_ACCOUNT_SID
+        and TWILIO_API_KEY_SID
+        and TWILIO_API_KEY_SECRET
+        and TWILIO_AUTH_TOKEN
+        and LUMIN_GATEWAY_PUBLIC_URL.startswith("https://")
+    )
+
+
 def _caller_id_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
@@ -453,6 +469,16 @@ async def _sd_caller_id_rows(user_id: str, company_id: str) -> list[dict[str, An
 
 
 async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
+    if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY):
+        return {
+            "active": None,
+            "pending": None,
+            "failed": None,
+            "verificationAvailable": False,
+            "fallbackAvailable": bool(LUMIN_CALLER_ID),
+            "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
+        }
+
     rows = await _sd_caller_id_rows(user_id, company_id)
     active = next(
         (
@@ -481,7 +507,21 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
         "active": _caller_id_summary(active),
         "pending": _caller_id_summary(pending),
         "failed": _caller_id_summary(failed),
+        "verificationAvailable": _sd_caller_id_verification_configured(),
+        "fallbackAvailable": bool(LUMIN_CALLER_ID),
+        "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
     }
+
+
+def _caller_id_verification_is_stale(requested_at: str | None) -> bool:
+    try:
+        value = datetime.fromisoformat(str(requested_at or "").replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - value).total_seconds() > 10 * 60
+    except (TypeError, ValueError):
+        return True
+
 
 async def _require_sd_context(authorization: str | None) -> tuple[str, dict[str, Any], str]:
     token = _sd_bearer_token(authorization)
@@ -775,14 +815,7 @@ async def health():
         "sdDialerConfigured": bool(
             SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_ANON_KEY
         ),
-        "sdDialerCallerIdConfigured": bool(
-            SD_DIALER_SUPABASE_SERVICE_ROLE_KEY
-            and TWILIO_ACCOUNT_SID
-            and TWILIO_API_KEY_SID
-            and TWILIO_API_KEY_SECRET
-            and TWILIO_AUTH_TOKEN
-            and LUMIN_GATEWAY_PUBLIC_URL.startswith("https://")
-        ),
+        "sdDialerCallerIdConfigured": _sd_caller_id_verification_configured(),
     }
 
 
@@ -952,14 +985,7 @@ async def sd_dialer_verify_caller_id(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     user_id, profile, _ = await _require_sd_context(authorization)
-    if not (
-        SD_DIALER_SUPABASE_SERVICE_ROLE_KEY
-        and TWILIO_ACCOUNT_SID
-        and TWILIO_API_KEY_SID
-        and TWILIO_API_KEY_SECRET
-        and TWILIO_AUTH_TOKEN
-        and LUMIN_GATEWAY_PUBLIC_URL.startswith("https://")
-    ):
+    if not _sd_caller_id_verification_configured():
         raise HTTPException(status_code=503, detail="A verificação de Caller ID ainda não está configurada")
 
     phone = _normalise_sd_phone(payload.phone)
@@ -993,22 +1019,41 @@ async def sd_dialer_verify_caller_id(
         )
         return await _sd_caller_id_status(user_id, company_id)
     if existing and existing.get("verification_status") == "pending":
-        return await _sd_caller_id_status(user_id, company_id)
+        if _caller_id_verification_is_stale(existing.get("requested_at")):
+            await _sd_admin_request_json(
+                "/rest/v1/sd_dialer_caller_ids",
+                {"id": f"eq.{existing['id']}", "verification_status": "eq.pending"},
+                method="PATCH",
+                body={"verification_status": "failed", "validation_code": None},
+                prefer="return=minimal",
+            )
+        else:
+            return await _sd_caller_id_status(user_id, company_id)
 
     user_pending = await _sd_admin_request_json(
         "/rest/v1/sd_dialer_caller_ids",
         {
             "user_id": f"eq.{user_id}",
             "verification_status": "eq.pending",
-            "select": "phone_number",
+            "select": "id,phone_number,requested_at",
             "limit": "1",
         },
     )
     if isinstance(user_pending, list) and user_pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Conclui primeiro a verificação em curso para {user_pending[0].get('phone_number')}.",
-        )
+        pending_row = user_pending[0]
+        if _caller_id_verification_is_stale(pending_row.get("requested_at")):
+            await _sd_admin_request_json(
+                "/rest/v1/sd_dialer_caller_ids",
+                {"id": f"eq.{pending_row['id']}", "verification_status": "eq.pending"},
+                method="PATCH",
+                body={"verification_status": "failed", "validation_code": None},
+                prefer="return=minimal",
+            )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Conclui primeiro a verificação em curso para {pending_row.get('phone_number')}.",
+            )
 
     one_hour_ago = datetime.fromtimestamp(time.time() - 3600, timezone.utc).isoformat()
     recent = await _sd_admin_request_json(
@@ -1129,6 +1174,8 @@ async def sd_dialer_twilio_caller_id_status(
     validator = RequestValidator(TWILIO_AUTH_TOKEN)
     if not signature or not validator.validate(callback_url, params, signature):
         raise HTTPException(status_code=403, detail="Assinatura Twilio inválida")
+    if params.get("AccountSid") != TWILIO_ACCOUNT_SID:
+        raise HTTPException(status_code=403, detail="Conta Twilio inválida")
 
     rows = await _sd_admin_request_json(
         "/rest/v1/sd_dialer_caller_ids",
@@ -1176,22 +1223,26 @@ async def sd_dialer_call(
     if is_manual == has_lead:
         raise HTTPException(status_code=400, detail="Escolhe uma lead ou introduz um número manual")
 
-    caller_rows = await _sd_admin_request_json(
-        "/rest/v1/sd_dialer_caller_ids",
-        {
-            "user_id": f"eq.{user_id}",
-            "company_id": f"eq.{profile['company_id']}",
-            "verification_status": "eq.verified",
-            "is_active": "eq.true",
-            "select": "phone_number",
-            "limit": "1",
-        },
-    )
-    caller_id = str(caller_rows[0].get("phone_number") or "") if caller_rows else ""
+    caller_id = LUMIN_CALLER_ID
+    if SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY:
+        caller_rows = await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {
+                "user_id": f"eq.{user_id}",
+                "company_id": f"eq.{profile['company_id']}",
+                "verification_status": "eq.verified",
+                "is_active": "eq.true",
+                "select": "phone_number",
+                "limit": "1",
+            },
+        )
+        user_caller_id = str(caller_rows[0].get("phone_number") or "") if caller_rows else ""
+        if user_caller_id:
+            caller_id = user_caller_id
     if not caller_id:
         raise HTTPException(
             status_code=409,
-            detail="Configura e verifica o teu número de saída antes de iniciar chamadas.",
+            detail="Não existe um número de saída configurado. Verifica um número pessoal ou pede ao administrador para configurar o número da empresa.",
         )
 
     lead = None
