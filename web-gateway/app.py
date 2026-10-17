@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import wave
@@ -12,12 +13,13 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
@@ -25,6 +27,7 @@ from livekit import api
 from livekit.agents import inference, utils
 from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTrunkRequest
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
+from twilio.request_validator import RequestValidator
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
@@ -48,6 +51,16 @@ LUMIN_PIPER_CATALOG_URL = os.getenv("LUMIN_PIPER_CATALOG_URL", "http://lumin-pip
 
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
+SD_DIALER_SUPABASE_SERVICE_ROLE_KEY = os.getenv("SD_DIALER_SUPABASE_SERVICE_ROLE_KEY", "")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "")
+TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+LUMIN_GATEWAY_PUBLIC_URL = (
+    os.getenv("LUMIN_GATEWAY_PUBLIC_URL")
+    or (f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else "")
+).rstrip("/")
 
 logger = logging.getLogger("lumin-voice-gateway")
 logging.basicConfig(level=logging.INFO)
@@ -138,6 +151,10 @@ class SDDialerCallRequest(BaseModel):
     consent_confirmed: bool = False
     agent_id: str = Field(default="lumin-telecom", max_length=80)
     agent: AgentProfile | None = None
+
+
+class SDDialerCallerIdRequest(BaseModel):
+    phone: str = Field(..., min_length=8, max_length=40)
 
 
 class SDDialerVoicePreviewRequest(BaseModel):
@@ -307,6 +324,205 @@ async def _sd_request_json(
         logger.warning("SD Dialer Supabase request error: %s", exc)
         raise HTTPException(status_code=502, detail="Falha ao validar dados do SD Dialer")
 
+
+async def _sd_admin_request_json(
+    path: str,
+    params: dict[str, str] | None = None,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    prefer: str | None = None,
+) -> Any:
+    if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY):
+        raise HTTPException(status_code=503, detail="Armazenamento seguro de caller ID não configurado")
+
+    query = urllib.parse.urlencode(params or {})
+    url = f"{SD_DIALER_SUPABASE_URL}{path}"
+    if query:
+        url += "?" + query
+
+    headers = {
+        "apikey": SD_DIALER_SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SD_DIALER_SUPABASE_SERVICE_ROLE_KEY}",
+        "Accept": "application/json",
+    }
+    request_body = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        request_body = json.dumps(body).encode("utf-8")
+    if prefer:
+        headers["Prefer"] = prefer
+
+    def do_request():
+        http_request = urllib.request.Request(
+            url,
+            data=request_body,
+            headers=headers,
+            method=method.upper(),
+        )
+        with urllib.request.urlopen(http_request, timeout=10) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else None
+
+    try:
+        return await asyncio.to_thread(do_request)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            raise HTTPException(
+                status_code=409,
+                detail="Existe uma verificação em curso ou este número já está associado a outra conta.",
+            )
+        logger.warning("SD Dialer caller-ID storage failed: %s %s", exc.code, path)
+        raise HTTPException(status_code=502, detail="Falha ao guardar a configuração do número")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("SD Dialer caller-ID storage request failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Falha ao guardar a configuração do número")
+
+
+def _twilio_api_request(path: str, form: dict[str, str]) -> dict[str, Any]:
+    if not (
+        TWILIO_ACCOUNT_SID
+        and TWILIO_API_KEY_SID
+        and TWILIO_API_KEY_SECRET
+    ):
+        raise HTTPException(status_code=503, detail="Integração de Caller ID da Twilio não configurada")
+
+    url = f"https://api.twilio.com{path}"
+    request_body = urllib.parse.urlencode(form).encode("utf-8")
+    credentials = base64.b64encode(
+        f"{TWILIO_API_KEY_SID}:{TWILIO_API_KEY_SECRET}".encode("utf-8")
+    ).decode("ascii")
+    http_request = urllib.request.Request(
+        url,
+        data=request_body,
+        method="POST",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(http_request, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        # Avoid logging Twilio's response body: it may contain the submitted phone number.
+        logger.warning("Twilio caller-ID verification failed with HTTP %s", exc.code)
+        raise HTTPException(
+            status_code=502,
+            detail="A Twilio não conseguiu iniciar a verificação. Confirma o número e tenta novamente.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Twilio caller-ID API request failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Não foi possível contactar a Twilio para verificar o número.",
+        )
+
+
+def _sd_caller_id_verification_configured() -> bool:
+    return bool(
+        SD_DIALER_SUPABASE_URL
+        and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY
+        and TWILIO_ACCOUNT_SID
+        and TWILIO_API_KEY_SID
+        and TWILIO_API_KEY_SECRET
+        and TWILIO_AUTH_TOKEN
+        and LUMIN_GATEWAY_PUBLIC_URL.startswith("https://")
+    )
+
+
+def _caller_id_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "phoneNumber": row.get("phone_number"),
+        "status": row.get("verification_status"),
+        "isActive": bool(row.get("is_active")),
+        "requestedAt": row.get("requested_at"),
+        "verifiedAt": row.get("verified_at"),
+        "validationCode": (
+            row.get("validation_code")
+            if row.get("verification_status") == "pending"
+            else None
+        ),
+    }
+
+
+async def _sd_caller_id_rows(user_id: str, company_id: str) -> list[dict[str, Any]]:
+    rows = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "user_id": f"eq.{user_id}",
+            "company_id": f"eq.{company_id}",
+            "select": "id,phone_number,verification_status,is_active,validation_code,requested_at,verified_at,twilio_outgoing_caller_id_sid",
+            "order": "requested_at.desc",
+            "limit": "30",
+        },
+    )
+    return rows if isinstance(rows, list) else []
+
+
+async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
+    if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY):
+        return {
+            "active": None,
+            "pending": None,
+            "failed": None,
+            "verificationAvailable": False,
+            "fallbackAvailable": bool(LUMIN_CALLER_ID),
+            "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
+        }
+
+    rows = await _sd_caller_id_rows(user_id, company_id)
+    active = next(
+        (
+            row for row in rows
+            if row.get("verification_status") == "verified" and row.get("is_active")
+        ),
+        None,
+    )
+    pending = next(
+        (row for row in rows if row.get("verification_status") == "pending"),
+        None,
+    )
+    active_requested_at = str((active or {}).get("requested_at") or "")
+    failed = next(
+        (
+            row for row in rows
+            if row.get("verification_status") == "failed"
+            and (
+                not active_requested_at
+                or str(row.get("requested_at") or "") > active_requested_at
+            )
+        ),
+        None,
+    )
+    return {
+        "active": _caller_id_summary(active),
+        "pending": _caller_id_summary(pending),
+        "failed": _caller_id_summary(failed),
+        "verificationAvailable": _sd_caller_id_verification_configured(),
+        "fallbackAvailable": bool(LUMIN_CALLER_ID),
+        "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
+    }
+
+
+def _caller_id_verification_is_stale(requested_at: str | None) -> bool:
+    try:
+        value = datetime.fromisoformat(str(requested_at or "").replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - value).total_seconds() > 10 * 60
+    except (TypeError, ValueError):
+        return True
+
+
 async def _require_sd_context(authorization: str | None) -> tuple[str, dict[str, Any], str]:
     token = _sd_bearer_token(authorization)
     user = await _sd_request_json("/auth/v1/user", token)
@@ -426,6 +642,7 @@ async def _run_outbound_call(
     phone: str,
     name: str,
     agent_profile: dict[str, Any] | None = None,
+    caller_id: str | None = None,
 ) -> None:
     state = _CALLS[call_id]
     room_name = state["roomName"]
@@ -467,8 +684,9 @@ async def _run_outbound_call(
                 "wait_until_answered": True,
             }
 
-            if LUMIN_CALLER_ID:
-                req_kwargs["sip_number"] = LUMIN_CALLER_ID
+            selected_caller_id = caller_id or LUMIN_CALLER_ID
+            if selected_caller_id:
+                req_kwargs["sip_number"] = selected_caller_id
 
             sip_participant = await lkapi.sip.create_sip_participant(
                 CreateSIPParticipantRequest(**req_kwargs),
@@ -559,6 +777,7 @@ def _queue_call(
     agent_profile: dict[str, Any] | None = None,
     source: str = "lumin-call-api",
     call_context: dict[str, Any] | None = None,
+    caller_id: str | None = None,
 ):
     global _LAST_CALL_AT
 
@@ -580,7 +799,7 @@ def _queue_call(
         "source": source,
         **(call_context or {}),
     }
-    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile))
+    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile, caller_id))
     return _CALLS[call_id]
 
 
@@ -596,6 +815,7 @@ async def health():
         "sdDialerConfigured": bool(
             SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_ANON_KEY
         ),
+        "sdDialerCallerIdConfigured": _sd_caller_id_verification_configured(),
     }
 
 
@@ -751,6 +971,247 @@ def _apply_sd_vodafone_script(
     return profile
 
 
+@app.get("/api/sd-dialer/caller-id")
+async def sd_dialer_caller_id(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    user_id, profile, _ = await _require_sd_context(authorization)
+    return await _sd_caller_id_status(user_id, str(profile["company_id"]))
+
+
+@app.post("/api/sd-dialer/caller-id/verify")
+async def sd_dialer_verify_caller_id(
+    payload: SDDialerCallerIdRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    user_id, profile, _ = await _require_sd_context(authorization)
+    if not _sd_caller_id_verification_configured():
+        raise HTTPException(status_code=503, detail="A verificação de Caller ID ainda não está configurada")
+
+    phone = _normalise_sd_phone(payload.phone)
+    company_id = str(profile["company_id"])
+
+    # A verified/pending number can belong to only one SD Dialer user.
+    matches = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "phone_number": f"eq.{phone}",
+            "verification_status": "in.(pending,verified)",
+            "select": "id,user_id,company_id,phone_number,verification_status,is_active,validation_code,requested_at,verified_at,twilio_outgoing_caller_id_sid",
+            "order": "requested_at.desc",
+            "limit": "1",
+        },
+    )
+    existing = matches[0] if isinstance(matches, list) and matches else None
+    if existing and str(existing.get("user_id")) != user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Este número já está associado a outro utilizador.",
+        )
+    if existing and existing.get("verification_status") == "verified":
+        twilio_sid = str(existing.get("twilio_outgoing_caller_id_sid") or "")
+        if not twilio_sid:
+            raise HTTPException(status_code=409, detail="Este número precisa de ser verificado novamente.")
+        await _sd_admin_request_json(
+            "/rest/v1/rpc/activate_sd_dialer_caller_id",
+            method="POST",
+            body={"p_verification_id": existing["id"], "p_twilio_sid": twilio_sid},
+        )
+        return await _sd_caller_id_status(user_id, company_id)
+    if existing and existing.get("verification_status") == "pending":
+        if _caller_id_verification_is_stale(existing.get("requested_at")):
+            await _sd_admin_request_json(
+                "/rest/v1/sd_dialer_caller_ids",
+                {"id": f"eq.{existing['id']}", "verification_status": "eq.pending"},
+                method="PATCH",
+                body={"verification_status": "failed", "validation_code": None},
+                prefer="return=minimal",
+            )
+        else:
+            return await _sd_caller_id_status(user_id, company_id)
+
+    user_pending = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "user_id": f"eq.{user_id}",
+            "verification_status": "eq.pending",
+            "select": "id,phone_number,requested_at",
+            "limit": "1",
+        },
+    )
+    if isinstance(user_pending, list) and user_pending:
+        pending_row = user_pending[0]
+        if _caller_id_verification_is_stale(pending_row.get("requested_at")):
+            await _sd_admin_request_json(
+                "/rest/v1/sd_dialer_caller_ids",
+                {"id": f"eq.{pending_row['id']}", "verification_status": "eq.pending"},
+                method="PATCH",
+                body={"verification_status": "failed", "validation_code": None},
+                prefer="return=minimal",
+            )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Conclui primeiro a verificação em curso para {pending_row.get('phone_number')}.",
+            )
+
+    one_hour_ago = datetime.fromtimestamp(time.time() - 3600, timezone.utc).isoformat()
+    recent = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "user_id": f"eq.{user_id}",
+            "requested_at": f"gte.{one_hour_ago}",
+            "select": "id",
+            "limit": "3",
+        },
+    )
+    if isinstance(recent, list) and len(recent) >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="Atingiste o limite de verificações. Tenta novamente dentro de uma hora.",
+        )
+
+    created = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        method="POST",
+        body={
+            "user_id": user_id,
+            "company_id": company_id,
+            "phone_number": phone,
+            "verification_status": "pending",
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        },
+        prefer="return=representation",
+    )
+    verification = created[0] if isinstance(created, list) and created else None
+    if not verification or not verification.get("id"):
+        raise HTTPException(status_code=502, detail="Não foi possível preparar a verificação.")
+
+    callback_url = (
+        f"{LUMIN_GATEWAY_PUBLIC_URL}/api/sd-dialer/caller-id/"
+        f"twilio-status/{verification['id']}"
+    )
+    account_path = (
+        f"/2010-04-01/Accounts/{urllib.parse.quote(TWILIO_ACCOUNT_SID, safe='')}"
+        "/OutgoingCallerIds.json"
+    )
+    try:
+        twilio_result = await asyncio.to_thread(
+            _twilio_api_request,
+            account_path,
+            {
+                "PhoneNumber": phone,
+                "FriendlyName": f"SD Dialer {user_id[:8]}",
+                "StatusCallback": callback_url,
+                "StatusCallbackMethod": "POST",
+            },
+        )
+    except HTTPException:
+        await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {"id": f"eq.{verification['id']}", "verification_status": "eq.pending"},
+            method="PATCH",
+            body={"verification_status": "failed", "validation_code": None},
+            prefer="return=minimal",
+        )
+        raise
+
+    validation_code = str(
+        twilio_result.get("ValidationCode") or twilio_result.get("validation_code") or ""
+    ).strip()
+    if not re.fullmatch(r"\d{4,8}", validation_code):
+        await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {"id": f"eq.{verification['id']}", "verification_status": "eq.pending"},
+            method="PATCH",
+            body={"verification_status": "failed", "validation_code": None},
+            prefer="return=minimal",
+        )
+        raise HTTPException(status_code=502, detail="A Twilio não devolveu um código de verificação válido.")
+    await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "id": f"eq.{verification['id']}",
+            "verification_status": "eq.pending",
+        },
+        method="PATCH",
+        body={
+            "validation_code": validation_code,
+            "twilio_call_sid": twilio_result.get("CallSid") or twilio_result.get("call_sid"),
+        },
+        prefer="return=minimal",
+    )
+
+    return await _sd_caller_id_status(user_id, company_id)
+
+
+@app.post("/api/sd-dialer/caller-id/twilio-status/{verification_id}")
+async def sd_dialer_twilio_caller_id_status(
+    verification_id: str,
+    request: Request,
+):
+    if not (TWILIO_AUTH_TOKEN and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY and LUMIN_GATEWAY_PUBLIC_URL.startswith("https://")):
+        raise HTTPException(status_code=503, detail="Callback de Caller ID não configurado")
+    try:
+        uuid.UUID(verification_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Verificação desconhecida")
+
+    raw_body = await request.body()
+    decoded_body = raw_body.decode("utf-8", errors="replace")
+    params = {
+        key: values[-1] if values else ""
+        for key, values in urllib.parse.parse_qs(
+            decoded_body,
+            keep_blank_values=True,
+        ).items()
+    }
+    signature = request.headers.get("X-Twilio-Signature", "")
+    callback_url = (
+        f"{LUMIN_GATEWAY_PUBLIC_URL}/api/sd-dialer/caller-id/"
+        f"twilio-status/{verification_id}"
+    )
+    validator = RequestValidator(TWILIO_AUTH_TOKEN)
+    if not signature or not validator.validate(callback_url, params, signature):
+        raise HTTPException(status_code=403, detail="Assinatura Twilio inválida")
+    if params.get("AccountSid") != TWILIO_ACCOUNT_SID:
+        raise HTTPException(status_code=403, detail="Conta Twilio inválida")
+
+    rows = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {"id": f"eq.{verification_id}", "select": "id,verification_status", "limit": "1"},
+    )
+    if not isinstance(rows, list) or not rows:
+        return Response(status_code=204)
+
+    verification_status = str(params.get("VerificationStatus") or "").lower()
+    if verification_status == "success":
+        twilio_sid = str(params.get("OutgoingCallerIdSid") or "").strip()
+        if twilio_sid:
+            await _sd_admin_request_json(
+                "/rest/v1/rpc/activate_sd_dialer_caller_id",
+                method="POST",
+                body={"p_verification_id": verification_id, "p_twilio_sid": twilio_sid},
+            )
+        else:
+            await _sd_admin_request_json(
+                "/rest/v1/sd_dialer_caller_ids",
+                {"id": f"eq.{verification_id}", "verification_status": "eq.pending"},
+                method="PATCH",
+                body={"verification_status": "failed", "validation_code": None},
+                prefer="return=minimal",
+            )
+    elif verification_status == "failed":
+        await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {"id": f"eq.{verification_id}", "verification_status": "eq.pending"},
+            method="PATCH",
+            body={"verification_status": "failed", "validation_code": None},
+            prefer="return=minimal",
+        )
+    return Response(status_code=204)
+
+
 @app.post("/api/sd-dialer/call")
 async def sd_dialer_call(
     payload: SDDialerCallRequest,
@@ -761,6 +1222,28 @@ async def sd_dialer_call(
     has_lead = bool(payload.lead_id)
     if is_manual == has_lead:
         raise HTTPException(status_code=400, detail="Escolhe uma lead ou introduz um número manual")
+
+    caller_id = LUMIN_CALLER_ID
+    if SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY:
+        caller_rows = await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {
+                "user_id": f"eq.{user_id}",
+                "company_id": f"eq.{profile['company_id']}",
+                "verification_status": "eq.verified",
+                "is_active": "eq.true",
+                "select": "phone_number",
+                "limit": "1",
+            },
+        )
+        user_caller_id = str(caller_rows[0].get("phone_number") or "") if caller_rows else ""
+        if user_caller_id:
+            caller_id = user_caller_id
+    if not caller_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Não existe um número de saída configurado. Verifica um número pessoal ou pede ao administrador para configurar o número da empresa.",
+        )
 
     lead = None
     lead_id: str | None = None
@@ -864,6 +1347,7 @@ async def sd_dialer_call(
             "manualNumber": is_manual,
             "manualConsentConfirmed": is_manual,
         },
+        caller_id=caller_id,
     )
     return {
         "ok": True,
