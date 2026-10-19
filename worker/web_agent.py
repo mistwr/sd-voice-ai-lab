@@ -112,19 +112,19 @@ def prewarm(proc: JobProcess) -> None:
 
 def xai_like_open_source_tts(
     base_tts: PiperTTS,
-    chatterbox_url: str,
+    kokoro_url: str,
 ) -> tuple[Any, str]:
-    """Use PT-PT Chatterbox with a fast local Piper fallback."""
+    """Use the installed European Portuguese Kokoro voice with a local Piper fallback."""
     local_piper = voice_for_profile(base_tts, "commercial")
-    if not chatterbox_url:
-        logger.warning("Chatterbox URL missing; using local Piper commercial PT-PT")
+    if not kokoro_url:
+        logger.warning("Kokoro URL missing; using local Piper commercial PT-PT")
         return local_piper, "piper-commercial"
 
-    chatterbox = ChatterboxRemoteTTS(chatterbox_url, language_id="pt")
+    kokoro = KokoroRemoteTTS(kokoro_url)
     fallback = tts.FallbackAdapter(
-        tts=[chatterbox, local_piper],
+        tts=[kokoro, local_piper],
         max_retry_per_tts=0,
-        sample_rate=max(chatterbox.sample_rate, local_piper.sample_rate),
+        sample_rate=max(kokoro.sample_rate, local_piper.sample_rate),
     )
 
     def _log_provider_availability(ev: Any) -> None:
@@ -139,7 +139,7 @@ def xai_like_open_source_tts(
         )
 
     fallback.on("tts_availability_changed", _log_provider_availability)
-    return fallback, "chatterbox-pt-pt-with-piper-commercial-fallback"
+    return fallback, "kokoro-ptpt-with-piper-commercial-fallback"
 
 
 
@@ -555,7 +555,7 @@ async def entrypoint(ctx: JobContext):
         # The Telecom profile asks for an xAI-like voice, but stays on open-source.
         tts_engine, selected_engine = xai_like_open_source_tts(
             base_tts,
-            chatterbox_url,
+            kokoro_url,
         )
         logger.info(
             "xAI voice profile routed to open-source PT-PT TTS",
