@@ -273,6 +273,32 @@ def _sd_bearer_token(authorization: str | None) -> str:
     return token
 
 
+def _sd_jwt_subject(token: str) -> str:
+    """Read the subject locally; PostgREST verifies the JWT signature on profile lookup."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3 or not parts[1] or not parts[2]:
+            raise ValueError("Malformed JWT")
+        encoded_payload = parts[1]
+        payload = base64.urlsafe_b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4)
+        )
+        claims = json.loads(payload.decode("utf-8"))
+        user_id = claims.get("sub")
+        expires_at = claims.get("exp")
+        if (
+            not isinstance(user_id, str)
+            or not user_id
+            or isinstance(expires_at, bool)
+            or not isinstance(expires_at, (int, float))
+            or expires_at <= time.time()
+        ):
+            raise ValueError("Missing or expired JWT claims")
+        return user_id
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, base64.binascii.Error):
+        raise HTTPException(status_code=401, detail="Sessao do SD Dialer invalida")
+
+
 async def _sd_request_with_retry(
     request_fn: Any,
     *,
@@ -715,10 +741,9 @@ def _caller_id_verification_is_stale(requested_at: str | None) -> bool:
 
 async def _require_sd_context(authorization: str | None) -> tuple[str, dict[str, Any], str]:
     token = _sd_bearer_token(authorization)
-    user = await _sd_request_json("/auth/v1/user", token)
-    user_id = str((user or {}).get("id") or "")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Sessao do SD Dialer invalida")
+    # The protected PostgREST request below verifies this JWT's signature and expiry.
+    # Decode only its subject here to avoid a separate, flaky Auth /user round-trip.
+    user_id = _sd_jwt_subject(token)
 
     rows = await _sd_request_json(
         "/rest/v1/usuarios",
