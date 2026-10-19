@@ -1389,6 +1389,17 @@ async def sd_dialer_call(
     payload: SDDialerCallRequest,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
+    if os.getenv("SD_DIALER_CALLS_PAUSED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "As chamadas de IA estão temporariamente indisponíveis. "
+                "Para apoiar a reativação, envia o valor da subscrição acordado por MB WAY "
+                "para 968 677 320 e o comprovativo por WhatsApp para o mesmo número. "
+                "Após confirmação, a ativação poderá demorar até 2 horas."
+            ),
+        )
+
     user_id, profile, token = await _require_sd_context(authorization)
     is_manual = bool(payload.phone)
     has_lead = bool(payload.lead_id)
