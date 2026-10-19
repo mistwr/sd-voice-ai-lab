@@ -512,19 +512,23 @@ async def entrypoint(ctx: JobContext):
             language="pt-PT",
         )
         selected_engine = "xai-neural-ptpt"
-    elif wants_neural_ptpt or wants_kokoro or wants_open_source:
-        # Existing xAI voice profiles now use an open-source PT-PT model by default.
-        # This avoids the xAI/LiveKit 429 path and keeps local Piper as an automatic fallback.
+    elif wants_neural_ptpt or wants_open_source:
+        # Start the greeting with local Piper so a remote TTS outage cannot leave
+        # the customer in silence while a network request times out.
+        tts_engine = voice_for_profile(base_tts, voice_id)
+        selected_engine = "piper"
+        if wants_neural_ptpt:
+            logger.info(
+                "xAI voice profile routed to local Piper PT-PT TTS",
+                extra={"voice_profile": voice_id, "provider": "Piper PT-PT tuned"},
+            )
+    elif wants_kokoro:
+        # Keep Kokoro available for profiles that explicitly select it.
         tts_engine, selected_engine = open_source_ptpt_tts(
             base_tts,
             voice_id,
             kokoro_url,
         )
-        if wants_neural_ptpt:
-            logger.info(
-                "xAI voice profile routed to open-source PT-PT TTS",
-                extra={"voice_profile": voice_id, "provider": selected_engine},
-            )
     elif wants_catalog and piper_catalog_url and catalog_key:
         tts_engine = PiperCatalogRemoteTTS(
             piper_catalog_url,
@@ -603,9 +607,22 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
+    stt_engine = inference.STT(
+        model="cartesia/ink-whisper",
+        language="pt",
+        fallback=[{"model": "deepgram/nova-3"}],
+    )
+    logger.info(
+        "speech recognition provider selected",
+        extra={
+            "primary_model": "cartesia/ink-whisper",
+            "fallback_model": "deepgram/nova-3",
+        },
+    )
+
     session = AgentSession(
         vad=inference.VAD(),
-        stt=inference.STT("deepgram/nova-3", language="pt"),
+        stt=stt_engine,
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,
         turn_handling=turn_handling,
