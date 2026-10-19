@@ -3,7 +3,7 @@ LUMIN Voice Agent
 Stable production voice path for luminai.pt and outbound SIP calls.
 
 Pipeline:
-WebRTC/SIP -> Deepgram STT -> GPT-5.6 Luna -> selectable neural PT-PT / Piper -> WebRTC/SIP
+WebRTC/SIP -> local Silero VAD + faster-whisper STT -> GPT-5.6 Luna -> local Piper / selectable TTS -> WebRTC/SIP
 """
 from __future__ import annotations
 
@@ -18,7 +18,9 @@ from typing import Any
 
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference, tts
+from livekit.plugins import silero
 
+from local_whisper_stt import LocalWhisperSTT
 from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
@@ -35,6 +37,32 @@ logger = logging.getLogger("lumin-web-agent")
 logger.setLevel(logging.INFO)
 
 _PIPER: PiperTTS | None = None
+_LOCAL_WHISPER: LocalWhisperSTT | None = None
+_LOCAL_VAD: Any = None
+
+
+def get_local_whisper_stt() -> LocalWhisperSTT:
+    global _LOCAL_WHISPER
+    if _LOCAL_WHISPER is None:
+        _LOCAL_WHISPER = LocalWhisperSTT(
+            model=os.getenv("LOCAL_WHISPER_MODEL", "small"),
+            cpu_threads=max(1, int(os.getenv("LOCAL_WHISPER_CPU_THREADS", "2"))),
+            workers=max(1, int(os.getenv("LOCAL_WHISPER_WORKERS", "2"))),
+        )
+    return _LOCAL_WHISPER
+
+
+def get_local_vad() -> Any:
+    global _LOCAL_VAD
+    if _LOCAL_VAD is None:
+        _LOCAL_VAD = silero.VAD.load(
+            min_speech_duration=0.05,
+            min_silence_duration=0.45,
+            prefix_padding_duration=0.35,
+            sample_rate=16000,
+            force_cpu=True,
+        )
+    return _LOCAL_VAD
 
 
 def get_piper() -> PiperTTS:
@@ -63,7 +91,7 @@ def get_piper() -> PiperTTS:
 VOICE_PROFILES = {
     "natural": dict(length_scale=1.08, noise_scale=0.38, noise_w_scale=0.43, volume=1.00),
     "clear": dict(length_scale=1.11, noise_scale=0.30, noise_w_scale=0.36, volume=1.01),
-    "commercial": dict(length_scale=1.07, noise_scale=0.40, noise_w_scale=0.45, volume=1.02),
+    "commercial": dict(length_scale=1.03, noise_scale=0.36, noise_w_scale=0.38, volume=1.02),
 }
 
 
@@ -107,7 +135,9 @@ def open_source_ptpt_tts(
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["lumin_tts"] = get_piper()
-    logger.info("Piper PT-PT prewarm complete")
+    proc.userdata["lumin_stt"] = get_local_whisper_stt()
+    proc.userdata["lumin_vad"] = get_local_vad()
+    logger.info("Local Piper, Whisper and Silero prewarm complete")
 
 
 def xai_like_open_source_tts(
@@ -550,6 +580,8 @@ async def entrypoint(ctx: JobContext):
     openvoice_url = os.getenv("OPENVOICE_TTS_URL", "").strip()
     kokoro_url = os.getenv("KOKORO_TTS_URL", "").strip()
     piper_catalog_url = os.getenv("PIPER_CATALOG_TTS_URL", "").strip()
+    profile_id = _clean(profile.get("id"), 80).strip().lower() if isinstance(profile, dict) else ""
+    is_telecom_profile = profile_id == "lumin-telecom"
     wants_custom = voice_id == "custom" or voice_source == "custom"
     wants_chatterbox = voice_engine == "chatterbox" or voice_id == "neural"
     wants_neural_ptpt = voice_engine in {"xai", "neural-ptpt"}
@@ -561,7 +593,13 @@ async def entrypoint(ctx: JobContext):
     livekit_tts_provider = os.getenv("LUMIN_TTS_PROVIDER", "opensource").strip().lower()
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
-    if wants_neural_ptpt and use_livekit_xai:
+    if is_telecom_profile:
+        # This profile uses only local Piper: no remote Kokoro/xAI TTS fallback,
+        # which previously added long startup delays when the provider was down.
+        tts_engine = voice_for_profile(base_tts, "commercial")
+        selected_engine = "piper-telecom-local"
+        logger.info("Lumin Telecom routed directly to local Piper")
+    elif wants_neural_ptpt and use_livekit_xai:
         # Explicit metered override; keep calls speaking if LiveKit returns 429.
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
         xai_tts = inference.TTS(
@@ -646,14 +684,15 @@ async def entrypoint(ctx: JobContext):
     # Natural turn-taking: detect the end of a Portuguese sentence instead of
     # treating every short pause as a finished turn. Real barge-ins such as
     # "não", "espere" or "sim" must still stop the agent quickly.
-    fast_tts = selected_engine == "piper" or selected_engine.startswith("piper-catalog:")
+    fast_tts = selected_engine.startswith("piper")
     turn_handling = TurnHandlingOptions(
-        turn_detection=inference.TurnDetector(version="v1-mini"),
+        # Use the prewarmed local Silero VAD instead of LiveKit's hosted
+        # turn-detection model, which was also returning inference 429s.
+        turn_detection="vad",
         endpointing={
-            "mode": "dynamic",
-            "min_delay": 0.30,
-            "max_delay": 0.85,
-            "alpha": 0.72,
+            "mode": "fixed",
+            "min_delay": 0.40,
+            "max_delay": 0.80,
         },
         interruption={
             "enabled": True,
@@ -674,21 +713,19 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
-    stt_engine = inference.STT(
-        model="deepgram/nova-3",
-        language="pt",
-        fallback=[{"model": "cartesia/ink-whisper"}],
-    )
+    stt_engine = ctx.proc.userdata.get("lumin_stt") or get_local_whisper_stt()
+    local_vad = ctx.proc.userdata.get("lumin_vad") or get_local_vad()
     logger.info(
         "speech recognition provider selected",
         extra={
-            "primary_model": "deepgram/nova-3",
-            "fallback_model": "cartesia/ink-whisper",
+            "provider": stt_engine.provider,
+            "model": stt_engine.model,
+            "turn_detection": "silero-vad-local",
         },
     )
 
     session = AgentSession(
-        vad=inference.VAD(),
+        vad=local_vad,
         stt=stt_engine,
         llm=inference.LLM("openai/gpt-5.6-luna"),
         tts=tts_engine,

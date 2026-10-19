@@ -3,3 +3,4 @@ python-dotenv~=1.0
 piper-tts==1.8.0
 
 httpx==0.28.1
+faster-whisper==1.2.1
