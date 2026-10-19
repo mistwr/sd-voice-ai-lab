@@ -512,23 +512,18 @@ async def entrypoint(ctx: JobContext):
             language="pt-PT",
         )
         selected_engine = "xai-neural-ptpt"
-    elif wants_neural_ptpt or wants_open_source:
-        # Start the greeting with local Piper so a remote TTS outage cannot leave
-        # the customer in silence while a network request times out.
-        tts_engine = voice_for_profile(base_tts, voice_id)
-        selected_engine = "piper"
-        if wants_neural_ptpt:
-            logger.info(
-                "xAI voice profile routed to local Piper PT-PT TTS",
-                extra={"voice_profile": voice_id, "provider": "Piper PT-PT tuned"},
-            )
-    elif wants_kokoro:
-        # Keep Kokoro available for profiles that explicitly select it.
+    elif wants_neural_ptpt or wants_kokoro or wants_open_source:
+        # Prefer self-hosted Kokoro PT-PT and fall back to the warm local Piper model.
         tts_engine, selected_engine = open_source_ptpt_tts(
             base_tts,
             voice_id,
             kokoro_url,
         )
+        if wants_neural_ptpt:
+            logger.info(
+                "xAI voice profile routed to open-source PT-PT TTS",
+                extra={"voice_profile": voice_id, "provider": selected_engine},
+            )
     elif wants_catalog and piper_catalog_url and catalog_key:
         tts_engine = PiperCatalogRemoteTTS(
             piper_catalog_url,

@@ -1781,19 +1781,46 @@ async def sd_dialer_voice_preview(
             raise HTTPException(status_code=502, detail="Não foi possível gerar a amostra de voz.")
         audio = b"".join(pcm_parts)
     else:
-        if not LUMIN_PIPER_CATALOG_URL:
-            raise HTTPException(status_code=503, detail="O motor Piper não está configurado.")
         profiles = {
             "natural": {"length_scale": 1.08, "noise_scale": 0.38, "noise_w_scale": 0.43, "volume": 1.00},
             "clear": {"length_scale": 1.11, "noise_scale": 0.30, "noise_w_scale": 0.36, "volume": 1.01},
             "commercial": {"length_scale": 1.07, "noise_scale": 0.40, "noise_w_scale": 0.45, "volume": 1.02},
         }
-        audio, headers = await asyncio.to_thread(
-            _voice_preview_bytes,
-            LUMIN_PIPER_CATALOG_URL,
-            {"text": text, "voice": "pt_PT-tugão-medium", **profiles[voice]},
-            120,
-        )
+        piper_payload = {
+            "text": text,
+            "voice": "pt_PT-tugão-medium",
+            **profiles[voice],
+        }
+        if engine == "xai":
+            try:
+                audio, headers = await asyncio.to_thread(
+                    _voice_preview_bytes,
+                    LUMIN_KOKORO_URL,
+                    {"text": text},
+                    8,
+                )
+            except HTTPException as exc:
+                logger.warning(
+                    "Kokoro voice preview failed; falling back to Piper",
+                    extra={"status_code": exc.status_code},
+                )
+                if not LUMIN_PIPER_CATALOG_URL:
+                    raise HTTPException(status_code=503, detail="O motor Piper não está configurado.")
+                audio, headers = await asyncio.to_thread(
+                    _voice_preview_bytes,
+                    LUMIN_PIPER_CATALOG_URL,
+                    piper_payload,
+                    120,
+                )
+        else:
+            if not LUMIN_PIPER_CATALOG_URL:
+                raise HTTPException(status_code=503, detail="O motor Piper não está configurado.")
+            audio, headers = await asyncio.to_thread(
+                _voice_preview_bytes,
+                LUMIN_PIPER_CATALOG_URL,
+                piper_payload,
+                120,
+            )
         try:
             sample_rate = int(headers.get("x-sample-rate", "24000"))
         except Exception:
