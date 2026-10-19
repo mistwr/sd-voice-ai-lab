@@ -106,6 +106,9 @@ def open_source_ptpt_tts(
 
 
 def prewarm(proc: JobProcess) -> None:
+    proc.userdata["lumin_tts"] = get_piper()
+    logger.info("Piper PT-PT prewarm complete")
+
 
 def xai_like_open_source_tts(
     base_tts: PiperTTS,
@@ -138,8 +141,6 @@ def xai_like_open_source_tts(
     fallback.on("tts_availability_changed", _log_provider_availability)
     return fallback, "chatterbox-pt-pt-with-piper-commercial-fallback"
 
-    proc.userdata["lumin_tts"] = get_piper()
-    logger.info("Piper PT-PT prewarm complete")
 
 
 def _clean(value: Any, limit: int = 1800) -> str:
