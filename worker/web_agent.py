@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference, tts
 
 from piper_tts import PiperTTS
 from chatterbox_tts import ChatterboxRemoteTTS
@@ -70,6 +70,40 @@ VOICE_PROFILES = {
 def voice_for_profile(base_tts: PiperTTS, voice_id: str) -> PiperTTS:
     settings = VOICE_PROFILES.get(voice_id, VOICE_PROFILES["natural"])
     return base_tts.with_profile(**settings)
+
+def open_source_ptpt_tts(
+    base_tts: PiperTTS,
+    voice_id: str,
+    kokoro_url: str,
+) -> tuple[Any, str]:
+    """Use Kokoro PT-PT first and fall back to local Piper if it fails."""
+    local_piper = voice_for_profile(base_tts, voice_id)
+    if not kokoro_url:
+        logger.warning("Kokoro URL missing; using local Piper PT-PT")
+        return local_piper, "piper"
+
+    kokoro = KokoroRemoteTTS(kokoro_url)
+    fallback = tts.FallbackAdapter(
+        tts=[kokoro, local_piper],
+        # Do not spend time retrying a rate-limited or unavailable primary TTS.
+        max_retry_per_tts=0,
+        sample_rate=max(kokoro.sample_rate, local_piper.sample_rate),
+    )
+
+    def _log_provider_availability(ev: Any) -> None:
+        log = logger.info if ev.available else logger.warning
+        log(
+            "open-source TTS provider availability changed",
+            extra={
+                "provider": getattr(ev.tts, "provider", "unknown"),
+                "model": getattr(ev.tts, "model", "unknown"),
+                "available": bool(ev.available),
+            },
+        )
+
+    fallback.on("tts_availability_changed", _log_provider_availability)
+    return fallback, "kokoro-ptpt-with-piper-fallback"
+
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["lumin_tts"] = get_piper()
@@ -462,12 +496,15 @@ async def entrypoint(ctx: JobContext):
     wants_chatterbox = voice_engine == "chatterbox" or voice_id == "neural"
     wants_neural_ptpt = voice_engine in {"xai", "neural-ptpt"}
     wants_kokoro = voice_engine == "kokoro" or voice_id == "kokoro"
+    wants_open_source = voice_engine in {"open-source", "opensource", "oss"}
     wants_catalog = voice_engine == "piper-catalog" or voice_id.startswith("piper:")
     catalog_key = voice_id.split(":", 1)[1] if voice_id.startswith("piper:") else voice_id
 
-    if wants_neural_ptpt:
-        # LiveKit Inference exposes pt-PT directly; no additional third-party key.
-        # This is deliberately opt-in: neural generation is billed through LiveKit.
+    livekit_tts_provider = os.getenv("LUMIN_TTS_PROVIDER", "opensource").strip().lower()
+    use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
+
+    if wants_neural_ptpt and use_livekit_xai:
+        # Keep the metered xAI route available as an explicit operator override.
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
         tts_engine = inference.TTS(
             model="xai/tts-1",
@@ -475,6 +512,19 @@ async def entrypoint(ctx: JobContext):
             language="pt-PT",
         )
         selected_engine = "xai-neural-ptpt"
+    elif wants_neural_ptpt or wants_kokoro or wants_open_source:
+        # Existing xAI voice profiles now use an open-source PT-PT model by default.
+        # This avoids the xAI/LiveKit 429 path and keeps local Piper as an automatic fallback.
+        tts_engine, selected_engine = open_source_ptpt_tts(
+            base_tts,
+            voice_id,
+            kokoro_url,
+        )
+        if wants_neural_ptpt:
+            logger.info(
+                "xAI voice profile routed to open-source PT-PT TTS",
+                extra={"voice_profile": voice_id, "provider": selected_engine},
+            )
     elif wants_catalog and piper_catalog_url and catalog_key:
         tts_engine = PiperCatalogRemoteTTS(
             piper_catalog_url,
@@ -496,9 +546,6 @@ async def entrypoint(ctx: JobContext):
             language_id="pt",
         )
         selected_engine = "chatterbox-custom"
-    elif wants_kokoro and kokoro_url:
-        tts_engine = KokoroRemoteTTS(kokoro_url)
-        selected_engine = "kokoro-system"
     elif wants_chatterbox and chatterbox_url:
         tts_engine = ChatterboxRemoteTTS(
             chatterbox_url,
@@ -511,8 +558,6 @@ async def entrypoint(ctx: JobContext):
             logger.warning("Piper catalog voice requested but PIPER_CATALOG_TTS_URL is missing; falling back to default Piper")
         if wants_custom and not voice_sample_url:
             logger.warning("custom voice requested without a signed sample URL; falling back to Piper")
-        if wants_kokoro and not kokoro_url:
-            logger.warning("Kokoro requested but KOKORO_TTS_URL is missing; falling back to Piper")
         if wants_chatterbox and not chatterbox_url:
             logger.warning("Chatterbox requested but CHATTERBOX_TTS_URL is missing; falling back to Piper")
         tts_engine = voice_for_profile(base_tts, voice_id)
