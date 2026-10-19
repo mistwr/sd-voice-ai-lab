@@ -1080,7 +1080,17 @@ async def sd_dialer_delete_caller_id(
         raise HTTPException(status_code=404, detail="Número associado não encontrado")
 
     twilio_sid = str(caller_id.get("twilio_outgoing_caller_id_sid") or "").strip()
-    if not twilio_sid:
+    fallback_phone = ""
+    if LUMIN_CALLER_ID:
+        try:
+            fallback_phone = _normalise_sd_phone(LUMIN_CALLER_ID)
+        except HTTPException:
+            fallback_phone = ""
+    preserve_twilio_caller_id = bool(
+        fallback_phone
+        and _normalise_sd_phone(str(caller_id.get("phone_number") or "")) == fallback_phone
+    )
+    if not twilio_sid and not preserve_twilio_caller_id:
         raise HTTPException(status_code=409, detail="Este número não tem um registo Twilio que possa ser removido automaticamente.")
 
     was_active = bool(caller_id.get("is_active"))
@@ -1098,30 +1108,31 @@ async def sd_dialer_delete_caller_id(
             prefer="return=minimal",
         )
 
-    account_path = (
-        f"/2010-04-01/Accounts/{urllib.parse.quote(TWILIO_ACCOUNT_SID, safe='')}"
-        f"/OutgoingCallerIds/{urllib.parse.quote(twilio_sid, safe='')}.json"
-    )
-    try:
-        await asyncio.to_thread(_twilio_api_delete, account_path)
-    except HTTPException:
-        if was_active:
-            try:
-                await _sd_admin_request_json(
-                    "/rest/v1/sd_dialer_caller_ids",
-                    {
-                        "id": f"eq.{caller_id_uuid}",
-                        "user_id": f"eq.{user_id}",
-                        "company_id": f"eq.{company_id}",
-                        "verification_status": "eq.verified",
-                    },
-                    method="PATCH",
-                    body={"is_active": True},
-                    prefer="return=minimal",
-                )
-            except Exception as restore_error:
-                logger.error("Caller-ID activation restore failed: %s", type(restore_error).__name__)
-        raise
+    if not preserve_twilio_caller_id:
+        account_path = (
+            f"/2010-04-01/Accounts/{urllib.parse.quote(TWILIO_ACCOUNT_SID, safe='')}"
+            f"/OutgoingCallerIds/{urllib.parse.quote(twilio_sid, safe='')}.json"
+        )
+        try:
+            await asyncio.to_thread(_twilio_api_delete, account_path)
+        except HTTPException:
+            if was_active:
+                try:
+                    await _sd_admin_request_json(
+                        "/rest/v1/sd_dialer_caller_ids",
+                        {
+                            "id": f"eq.{caller_id_uuid}",
+                            "user_id": f"eq.{user_id}",
+                            "company_id": f"eq.{company_id}",
+                            "verification_status": "eq.verified",
+                        },
+                        method="PATCH",
+                        body={"is_active": True},
+                        prefer="return=minimal",
+                    )
+                except Exception as restore_error:
+                    logger.error("Caller-ID activation restore failed: %s", type(restore_error).__name__)
+            raise
 
     await _sd_admin_request_json(
         "/rest/v1/sd_dialer_caller_ids",
@@ -1134,7 +1145,10 @@ async def sd_dialer_delete_caller_id(
         method="DELETE",
         prefer="return=minimal",
     )
-    return await _sd_caller_id_status(user_id, company_id)
+    status = await _sd_caller_id_status(user_id, company_id)
+    if preserve_twilio_caller_id:
+        status["twilioCallerIdRetained"] = True
+    return status
 
 
 @app.post("/api/sd-dialer/caller-id/verify")
