@@ -284,6 +284,8 @@ def _sd_jwt_subject(token: str) -> str:
             encoded_payload + "=" * (-len(encoded_payload) % 4)
         )
         claims = json.loads(payload.decode("utf-8"))
+        if not isinstance(claims, dict):
+            raise ValueError("JWT claims must be an object")
         user_id = claims.get("sub")
         expires_at = claims.get("exp")
         if (
