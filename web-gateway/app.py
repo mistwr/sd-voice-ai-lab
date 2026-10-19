@@ -555,10 +555,7 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
             "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
         }
 
-    active_rows, pending_rows, failed_rows, verified_rows = await asyncio.gather(
-        _sd_caller_id_rows(
-            user_id, company_id, verification_status="verified", is_active=True
-        ),
+    pending_rows, failed_rows, verified_rows = await asyncio.gather(
         _sd_caller_id_rows(
             user_id, company_id, verification_status="pending"
         ),
@@ -567,7 +564,7 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
         ),
         _sd_verified_caller_id_rows(user_id, company_id),
     )
-    active = active_rows[0] if active_rows else None
+    active = next((row for row in verified_rows if row.get("is_active")), None)
     pending = pending_rows[0] if pending_rows else None
     failed = failed_rows[0] if failed_rows else None
     active_requested_at = str((active or {}).get("requested_at") or "")
