@@ -110,6 +110,39 @@ def prewarm(proc: JobProcess) -> None:
     logger.info("Piper PT-PT prewarm complete")
 
 
+def xai_like_open_source_tts(
+    base_tts: PiperTTS,
+    chatterbox_url: str,
+) -> tuple[Any, str]:
+    """Use PT-PT Chatterbox with a fast local Piper fallback."""
+    local_piper = voice_for_profile(base_tts, "commercial")
+    if not chatterbox_url:
+        logger.warning("Chatterbox URL missing; using local Piper commercial PT-PT")
+        return local_piper, "piper-commercial"
+
+    chatterbox = ChatterboxRemoteTTS(chatterbox_url, language_id="pt")
+    fallback = tts.FallbackAdapter(
+        tts=[chatterbox, local_piper],
+        max_retry_per_tts=0,
+        sample_rate=max(chatterbox.sample_rate, local_piper.sample_rate),
+    )
+
+    def _log_provider_availability(ev: Any) -> None:
+        log = logger.info if ev.available else logger.warning
+        log(
+            "open-source TTS provider availability changed",
+            extra={
+                "provider": getattr(ev.tts, "provider", "unknown"),
+                "model": getattr(ev.tts, "model", "unknown"),
+                "available": bool(ev.available),
+            },
+        )
+
+    fallback.on("tts_availability_changed", _log_provider_availability)
+    return fallback, "chatterbox-pt-pt-with-piper-commercial-fallback"
+
+
+
 def _clean(value: Any, limit: int = 1800) -> str:
     if value is None:
         return ""
@@ -504,26 +537,36 @@ async def entrypoint(ctx: JobContext):
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
     if wants_neural_ptpt and use_livekit_xai:
-        # Keep the metered xAI route available as an explicit operator override.
+        # Explicit metered override; keep calls speaking if LiveKit returns 429.
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
-        tts_engine = inference.TTS(
+        xai_tts = inference.TTS(
             model="xai/tts-1",
             voice=voices.get(voice_id, "rex"),
             language="pt-PT",
         )
-        selected_engine = "xai-neural-ptpt"
-    elif wants_neural_ptpt or wants_kokoro or wants_open_source:
-        # Prefer self-hosted Kokoro PT-PT and fall back to the warm local Piper model.
+        local_fallback = voice_for_profile(base_tts, "commercial")
+        tts_engine = tts.FallbackAdapter(
+            tts=[xai_tts, local_fallback],
+            max_retry_per_tts=0,
+            sample_rate=max(xai_tts.sample_rate, local_fallback.sample_rate),
+        )
+        selected_engine = "xai-neural-ptpt-with-piper-fallback"
+    elif wants_neural_ptpt:
+        # The Telecom profile asks for an xAI-like voice, but stays on open-source.
+        tts_engine, selected_engine = xai_like_open_source_tts(
+            base_tts,
+            chatterbox_url,
+        )
+        logger.info(
+            "xAI voice profile routed to open-source PT-PT TTS",
+            extra={"voice_profile": voice_id, "provider": selected_engine},
+        )
+    elif wants_kokoro or wants_open_source:
         tts_engine, selected_engine = open_source_ptpt_tts(
             base_tts,
             voice_id,
             kokoro_url,
         )
-        if wants_neural_ptpt:
-            logger.info(
-                "xAI voice profile routed to open-source PT-PT TTS",
-                extra={"voice_profile": voice_id, "provider": selected_engine},
-            )
     elif wants_catalog and piper_catalog_url and catalog_key:
         tts_engine = PiperCatalogRemoteTTS(
             piper_catalog_url,
