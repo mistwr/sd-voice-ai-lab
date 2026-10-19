@@ -52,6 +52,8 @@ LUMIN_PIPER_CATALOG_URL = os.getenv("LUMIN_PIPER_CATALOG_URL", "http://lumin-pip
 SD_DIALER_SUPABASE_URL = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
 SD_DIALER_SUPABASE_ANON_KEY = os.getenv("SD_DIALER_SUPABASE_ANON_KEY", "")
 SD_DIALER_SUPABASE_SERVICE_ROLE_KEY = os.getenv("SD_DIALER_SUPABASE_SERVICE_ROLE_KEY", "")
+SD_DIALER_SUPABASE_REQUEST_TIMEOUT_SECONDS = 12
+SD_DIALER_TEMPORARY_ERROR = "O serviço de dados do SD Dialer está temporariamente lento. Aguarda alguns segundos e tenta novamente."
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "")
 TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
@@ -271,6 +273,50 @@ def _sd_bearer_token(authorization: str | None) -> str:
     return token
 
 
+async def _sd_request_with_retry(
+    request_fn: Any,
+    *,
+    method: str,
+    path: str,
+    retry_safe: bool | None = None,
+) -> Any:
+    request_method = method.upper()
+    safe_to_retry = (
+        request_method in {"GET", "HEAD"}
+        if retry_safe is None
+        else retry_safe
+    )
+    max_attempts = 2 if safe_to_retry else 1
+
+    for attempt in range(max_attempts):
+        try:
+            return await asyncio.to_thread(request_fn)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {408, 503, 504} or attempt + 1 >= max_attempts:
+                raise
+            logger.warning(
+                "Retrying SD Dialer Supabase %s %s after HTTP %s",
+                request_method,
+                path,
+                exc.code,
+            )
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            if attempt + 1 >= max_attempts:
+                raise
+            logger.warning(
+                "Retrying SD Dialer Supabase %s %s after %s",
+                request_method,
+                path,
+                type(exc).__name__,
+            )
+
+        # One short backoff avoids immediately adding load during a transient
+        # Supabase timeout while still keeping the dialer responsive.
+        await asyncio.sleep(0.5)
+
+    raise RuntimeError("Supabase retry loop exited unexpectedly")
+
+
 async def _sd_request_json(
     path: str,
     token: str,
@@ -279,6 +325,7 @@ async def _sd_request_json(
     method: str = "GET",
     body: dict[str, Any] | None = None,
     prefer: str | None = None,
+    retry_safe: bool | None = None,
 ) -> Any:
     if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_ANON_KEY):
         raise HTTPException(status_code=503, detail="Integracao SD Dialer nao configurada")
@@ -288,6 +335,7 @@ async def _sd_request_json(
     if query:
         url += "?" + query
 
+    request_method = method.upper()
     headers = {
         "apikey": SD_DIALER_SUPABASE_ANON_KEY,
         "Authorization": f"Bearer {token}",
@@ -305,23 +353,57 @@ async def _sd_request_json(
             url,
             data=request_body,
             headers=headers,
-            method=method.upper(),
+            method=request_method,
         )
-        with urllib.request.urlopen(req, timeout=8) as response:
+        with urllib.request.urlopen(
+            req,
+            timeout=SD_DIALER_SUPABASE_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else None
 
     try:
-        return await asyncio.to_thread(do_request)
+        return await _sd_request_with_retry(
+            do_request,
+            method=request_method,
+            path=path,
+            retry_safe=retry_safe,
+        )
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             raise HTTPException(status_code=401, detail="Sessao do SD Dialer invalida")
-        logger.warning("SD Dialer Supabase request failed: %s %s", exc.code, path)
+        if exc.code in (408, 429, 503, 504):
+            logger.warning(
+                "SD Dialer Supabase returned HTTP %s for %s %s",
+                exc.code,
+                request_method,
+                path,
+            )
+            raise HTTPException(status_code=503, detail=SD_DIALER_TEMPORARY_ERROR)
+        logger.warning(
+            "SD Dialer Supabase request failed: %s %s %s",
+            request_method,
+            path,
+            exc.code,
+        )
         raise HTTPException(status_code=502, detail="Falha ao validar dados do SD Dialer")
     except HTTPException:
         raise
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        logger.warning(
+            "SD Dialer Supabase network error: %s %s (%s)",
+            request_method,
+            path,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail=SD_DIALER_TEMPORARY_ERROR)
     except Exception as exc:
-        logger.warning("SD Dialer Supabase request error: %s", exc)
+        logger.warning(
+            "SD Dialer Supabase request error: %s %s (%s)",
+            request_method,
+            path,
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=502, detail="Falha ao validar dados do SD Dialer")
 
 
@@ -332,6 +414,7 @@ async def _sd_admin_request_json(
     method: str = "GET",
     body: dict[str, Any] | None = None,
     prefer: str | None = None,
+    retry_safe: bool | None = None,
 ) -> Any:
     if not (SD_DIALER_SUPABASE_URL and SD_DIALER_SUPABASE_SERVICE_ROLE_KEY):
         raise HTTPException(status_code=503, detail="Armazenamento seguro de caller ID não configurado")
@@ -341,6 +424,7 @@ async def _sd_admin_request_json(
     if query:
         url += "?" + query
 
+    request_method = method.upper()
     headers = {
         "apikey": SD_DIALER_SUPABASE_SERVICE_ROLE_KEY,
         "Authorization": f"Bearer {SD_DIALER_SUPABASE_SERVICE_ROLE_KEY}",
@@ -358,26 +442,60 @@ async def _sd_admin_request_json(
             url,
             data=request_body,
             headers=headers,
-            method=method.upper(),
+            method=request_method,
         )
-        with urllib.request.urlopen(http_request, timeout=10) as response:
+        with urllib.request.urlopen(
+            http_request,
+            timeout=SD_DIALER_SUPABASE_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else None
 
     try:
-        return await asyncio.to_thread(do_request)
+        return await _sd_request_with_retry(
+            do_request,
+            method=request_method,
+            path=path,
+            retry_safe=retry_safe,
+        )
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
             raise HTTPException(
                 status_code=409,
                 detail="Existe uma verificação em curso ou este número já está associado a outra conta.",
             )
-        logger.warning("SD Dialer caller-ID storage failed: %s %s", exc.code, path)
+        if exc.code in (408, 429, 503, 504):
+            logger.warning(
+                "SD Dialer caller-ID storage returned HTTP %s for %s %s",
+                exc.code,
+                request_method,
+                path,
+            )
+            raise HTTPException(status_code=503, detail=SD_DIALER_TEMPORARY_ERROR)
+        logger.warning(
+            "SD Dialer caller-ID storage failed: %s %s %s",
+            request_method,
+            path,
+            exc.code,
+        )
         raise HTTPException(status_code=502, detail="Falha ao guardar a configuração do número")
     except HTTPException:
         raise
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        logger.warning(
+            "SD Dialer caller-ID storage network error: %s %s (%s)",
+            request_method,
+            path,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail=SD_DIALER_TEMPORARY_ERROR)
     except Exception as exc:
-        logger.warning("SD Dialer caller-ID storage request failed: %s", type(exc).__name__)
+        logger.warning(
+            "SD Dialer caller-ID storage request failed: %s %s (%s)",
+            request_method,
+            path,
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=502, detail="Falha ao guardar a configuração do número")
 
 
@@ -1437,6 +1555,7 @@ async def sd_dialer_call(
             "/rest/v1/rpc/get_voice_lead_for_call",
             token,
             {"p_lead_id": str(payload.lead_id)},
+            retry_safe=True,
         )
         lead = leads[0] if isinstance(leads, list) and leads else None
         if not lead:
