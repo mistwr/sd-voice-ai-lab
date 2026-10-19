@@ -459,10 +459,12 @@ class LuminAgent(Agent):
             return self._follow_up_confirmation
 
     async def on_enter(self):
-        await self.session.say(
-            build_greeting(self._profile, self._customer_name),
-            allow_interruptions=True,
-        )
+        greeting = build_greeting(self._profile, self._customer_name)
+        parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", greeting) if part.strip()]
+        opening = parts[0] if parts else greeting
+        await self.session.say(opening, allow_interruptions=True)
+        if len(parts) > 1:
+            await self.session.say(" ".join(parts[1:]), allow_interruptions=True)
 
 async def entrypoint(ctx: JobContext):
     metadata: dict[str, Any] = {}
@@ -480,31 +482,54 @@ async def entrypoint(ctx: JobContext):
     requested_by = _clean(metadata.get("requestedBy") or metadata.get("requested_by"), 80)
     lead_capture = LeadCapture.from_job(metadata)
     voice_call_logger: SupabaseLogger | None = None
+    voice_call_record_created = False
+    voice_call_record_ready = asyncio.Event()
+    voice_call_record_task: asyncio.Task[None] | None = None
+    cleanup_task: asyncio.Task[Any] | None = None
     call_started_at = datetime.now(timezone.utc)
 
     if is_sd_dialer_call and call_id and company_id:
         try:
             candidate_logger = SupabaseLogger()
-            created = await candidate_logger.create_voice_call(
-                call_id=call_id,
-                company_id=company_id,
-                phone_number=_clean(metadata.get("phone"), 80),
-                client_name=customer_name,
-                created_by=requested_by or None,
-                lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80) or None,
-                livekit_room=ctx.room.name,
-                source=source,
-            )
-            if created:
-                voice_call_logger = candidate_logger
-                await voice_call_logger.cleanup_expired_transcripts(company_id)
-            else:
-                await candidate_logger.close()
+            voice_call_logger = candidate_logger
         except Exception as exc:
             logger.warning(
                 "SD Dialer call history unavailable",
                 extra={"error_type": type(exc).__name__},
             )
+            voice_call_record_ready.set()
+        else:
+            async def _create_voice_call_record() -> None:
+                nonlocal voice_call_record_created, cleanup_task
+                try:
+                    voice_call_record_created = await asyncio.wait_for(
+                        candidate_logger.create_voice_call(
+                            call_id=call_id,
+                            company_id=company_id,
+                            phone_number=_clean(metadata.get("phone"), 80),
+                            client_name=customer_name,
+                            created_by=requested_by or None,
+                            lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80) or None,
+                            livekit_room=ctx.room.name,
+                            source=source,
+                        ),
+                        timeout=3.0,
+                    )
+                    if voice_call_record_created:
+                        cleanup_task = asyncio.create_task(
+                            candidate_logger.cleanup_expired_transcripts(company_id)
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "SD Dialer call history unavailable",
+                        extra={"error_type": type(exc).__name__},
+                    )
+                finally:
+                    voice_call_record_ready.set()
+
+            voice_call_record_task = asyncio.create_task(_create_voice_call_record())
+    else:
+        voice_call_record_ready.set()
 
     logger.info(
         "voice session started",
@@ -545,12 +570,16 @@ async def entrypoint(ctx: JobContext):
             language="pt-PT",
         )
         local_fallback = voice_for_profile(base_tts, "commercial")
+        fallback_tts = [xai_tts]
+        if kokoro_url:
+            fallback_tts.append(KokoroRemoteTTS(kokoro_url))
+        fallback_tts.append(local_fallback)
         tts_engine = tts.FallbackAdapter(
-            tts=[xai_tts, local_fallback],
+            tts=fallback_tts,
             max_retry_per_tts=0,
-            sample_rate=max(xai_tts.sample_rate, local_fallback.sample_rate),
+            sample_rate=max(engine.sample_rate for engine in fallback_tts),
         )
-        selected_engine = "xai-neural-ptpt-with-piper-fallback"
+        selected_engine = "xai-neural-ptpt-with-kokoro-piper-fallback"
     elif wants_neural_ptpt:
         # The Telecom profile asks for an xAI-like voice, but stays on open-source.
         tts_engine, selected_engine = xai_like_open_source_tts(
@@ -619,7 +648,7 @@ async def entrypoint(ctx: JobContext):
     # "não", "espere" or "sim" must still stop the agent quickly.
     fast_tts = selected_engine == "piper" or selected_engine.startswith("piper-catalog:")
     turn_handling = TurnHandlingOptions(
-        turn_detection=inference.TurnDetector(),
+        turn_detection=inference.TurnDetector(version="v1-mini"),
         endpointing={
             "mode": "dynamic",
             "min_delay": 0.30,
@@ -628,7 +657,7 @@ async def entrypoint(ctx: JobContext):
         },
         interruption={
             "enabled": True,
-            "mode": "adaptive",
+            "mode": "vad",
             "min_duration": 0.30,
             "min_words": 1,
             "false_interruption_timeout": 1.20,
@@ -646,15 +675,15 @@ async def entrypoint(ctx: JobContext):
     )
 
     stt_engine = inference.STT(
-        model="cartesia/ink-whisper",
+        model="deepgram/nova-3",
         language="pt",
-        fallback=[{"model": "deepgram/nova-3"}],
+        fallback=[{"model": "cartesia/ink-whisper"}],
     )
     logger.info(
         "speech recognition provider selected",
         extra={
-            "primary_model": "cartesia/ink-whisper",
-            "fallback_model": "deepgram/nova-3",
+            "primary_model": "deepgram/nova-3",
+            "fallback_model": "cartesia/ink-whisper",
         },
     )
 
@@ -695,6 +724,12 @@ async def entrypoint(ctx: JobContext):
     async def _persist_sd_dialer_transcript(role: Any, text_value: str) -> None:
         if voice_call_logger is None or not call_id or not company_id:
             return
+        try:
+            await asyncio.wait_for(voice_call_record_ready.wait(), timeout=3.5)
+        except TimeoutError:
+            return
+        if not voice_call_record_created:
+            return
 
         async with transcript_lock:
             role_name = _clean(role, 40).lower()
@@ -730,20 +765,45 @@ async def entrypoint(ctx: JobContext):
             )
 
     async def _finalize_call() -> None:
+        if voice_call_record_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(voice_call_record_task), timeout=3.5)
+            except TimeoutError:
+                logger.warning("Timed out waiting for SD Dialer call history task")
         if transcript_tasks:
             await asyncio.gather(*tuple(transcript_tasks), return_exceptions=True)
         if lead_capture is not None:
             await lead_capture.register()
         if voice_call_logger is not None:
-            ended_at = datetime.now(timezone.utc)
-            duration_seconds = max(0, int((ended_at - call_started_at).total_seconds()))
-            await voice_call_logger.update_call(
-                call_id,
-                status="answered",
-                ended_at=ended_at.isoformat(),
-                duration_seconds=duration_seconds,
-            )
-            await voice_call_logger.close()
+            try:
+                if voice_call_record_created:
+                    ended_at = datetime.now(timezone.utc)
+                    duration_seconds = max(0, int((ended_at - call_started_at).total_seconds()))
+                    await asyncio.wait_for(
+                        voice_call_logger.update_call(
+                            call_id,
+                            status="answered",
+                            ended_at=ended_at.isoformat(),
+                            duration_seconds=duration_seconds,
+                        ),
+                        timeout=3.0,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "SD Dialer call history finalization failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+            finally:
+                if cleanup_task is not None:
+                    cleanup_task.cancel()
+                    await asyncio.gather(cleanup_task, return_exceptions=True)
+                try:
+                    await voice_call_logger.close()
+                except Exception as exc:
+                    logger.warning(
+                        "SD Dialer call history cleanup failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
 
     ctx.add_shutdown_callback(_finalize_call)
 
