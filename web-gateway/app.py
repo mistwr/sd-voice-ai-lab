@@ -1797,7 +1797,7 @@ async def sd_dialer_voice_preview(
                     _voice_preview_bytes,
                     LUMIN_KOKORO_URL,
                     {"text": text},
-                    8,
+                    18,
                 )
             except HTTPException as exc:
                 logger.warning(

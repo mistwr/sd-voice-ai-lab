@@ -57,7 +57,7 @@ class KokoroChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Keep failure detection short so the local Piper fallback can speak promptly.
-        timeout = httpx.Timeout(connect=3.0, read=8.0, write=5.0, pool=3.0)
+        timeout = httpx.Timeout(connect=3.0, read=18.0, write=5.0, pool=3.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self._kokoro._base_url}/synthesize",
