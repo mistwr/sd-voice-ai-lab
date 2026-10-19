@@ -62,7 +62,7 @@ class KokoroChunkedStream(tts.ChunkedStream):
         timeout = httpx.Timeout(connect=3.0, read=18.0, write=5.0, pool=3.0)
         try:
             # This is a wall-clock deadline; HTTP read timeouts alone reset when data arrives.
-            async with asyncio.timeout(8.0):
+            async with asyncio.timeout(4.0):
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(
                         f"{self._kokoro._base_url}/synthesize",
@@ -71,7 +71,7 @@ class KokoroChunkedStream(tts.ChunkedStream):
                     response.raise_for_status()
                     pcm16 = response.content
         except TimeoutError as exc:
-            raise TimeoutError("Kokoro synthesis exceeded the 8-second total deadline") from exc
+            raise TimeoutError("Kokoro synthesis exceeded the 4-second total deadline") from exc
 
         output_emitter.initialize(
             request_id=shortuuid(),
