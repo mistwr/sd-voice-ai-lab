@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from livekit.agents import tts
@@ -58,13 +60,18 @@ class KokoroChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Keep failure detection short so the local Piper fallback can speak promptly.
         timeout = httpx.Timeout(connect=3.0, read=18.0, write=5.0, pool=3.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{self._kokoro._base_url}/synthesize",
-                json={"text": self._input_text},
-            )
-            response.raise_for_status()
-            pcm16 = response.content
+        try:
+            # This is a wall-clock deadline; HTTP read timeouts alone reset when data arrives.
+            async with asyncio.timeout(8.0):
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self._kokoro._base_url}/synthesize",
+                        json={"text": self._input_text},
+                    )
+                    response.raise_for_status()
+                    pcm16 = response.content
+        except TimeoutError as exc:
+            raise TimeoutError("Kokoro synthesis exceeded the 8-second total deadline") from exc
 
         output_emitter.initialize(
             request_id=shortuuid(),
