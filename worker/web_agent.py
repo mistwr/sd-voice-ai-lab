@@ -76,7 +76,7 @@ def open_source_ptpt_tts(
     voice_id: str,
     kokoro_url: str,
 ) -> tuple[Any, str]:
-    """Use Kokoro PT-PT first and fall back immediately to the local Piper voice."""
+    """Use Kokoro PT-PT first and fall back to local Piper if it fails."""
     local_piper = voice_for_profile(base_tts, voice_id)
     if not kokoro_url:
         logger.warning("Kokoro URL missing; using local Piper PT-PT")
@@ -514,7 +514,7 @@ async def entrypoint(ctx: JobContext):
         selected_engine = "xai-neural-ptpt"
     elif wants_neural_ptpt or wants_kokoro or wants_open_source:
         # Existing xAI voice profiles now use an open-source PT-PT model by default.
-        # This avoids the xAI/LiveKit 429 path and keeps local Piper as an immediate fallback.
+        # This avoids the xAI/LiveKit 429 path and keeps local Piper as an automatic fallback.
         tts_engine, selected_engine = open_source_ptpt_tts(
             base_tts,
             voice_id,
