@@ -81,7 +81,7 @@ app.add_middleware(
         "http://localhost:5173",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -495,18 +495,52 @@ def _caller_id_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-async def _sd_caller_id_rows(user_id: str, company_id: str) -> list[dict[str, Any]]:
+async def _sd_caller_id_rows(
+    user_id: str,
+    company_id: str,
+    *,
+    verification_status: str | None = None,
+    is_active: bool | None = None,
+    limit: int = 1,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    params = {
+        "user_id": f"eq.{user_id}",
+        "company_id": f"eq.{company_id}",
+        "select": "id,phone_number,verification_status,is_active,validation_code,requested_at,verified_at,twilio_outgoing_caller_id_sid",
+        "order": "requested_at.desc,id.desc",
+        "limit": str(limit),
+    }
+    if verification_status:
+        params["verification_status"] = f"eq.{verification_status}"
+    if is_active is not None:
+        params["is_active"] = f"eq.{str(is_active).lower()}"
+    if offset:
+        params["offset"] = str(offset)
+
     rows = await _sd_admin_request_json(
         "/rest/v1/sd_dialer_caller_ids",
-        {
-            "user_id": f"eq.{user_id}",
-            "company_id": f"eq.{company_id}",
-            "select": "id,phone_number,verification_status,is_active,validation_code,requested_at,verified_at,twilio_outgoing_caller_id_sid",
-            "order": "requested_at.desc",
-            "limit": "100",
-        },
+        params,
     )
     return rows if isinstance(rows, list) else []
+
+
+async def _sd_verified_caller_id_rows(user_id: str, company_id: str) -> list[dict[str, Any]]:
+    verified: list[dict[str, Any]] = []
+    page_size = 100
+    offset = 0
+    while True:
+        rows = await _sd_caller_id_rows(
+            user_id,
+            company_id,
+            verification_status="verified",
+            limit=page_size,
+            offset=offset,
+        )
+        verified.extend(rows)
+        if len(rows) < page_size:
+            return verified
+        offset += len(rows)
 
 
 async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
@@ -521,44 +555,38 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
             "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
         }
 
-    rows = await _sd_caller_id_rows(user_id, company_id)
-    active = next(
-        (
-            row for row in rows
-            if row.get("verification_status") == "verified" and row.get("is_active")
+    active_rows, pending_rows, failed_rows, verified_rows = await asyncio.gather(
+        _sd_caller_id_rows(
+            user_id, company_id, verification_status="verified", is_active=True
         ),
-        None,
+        _sd_caller_id_rows(
+            user_id, company_id, verification_status="pending"
+        ),
+        _sd_caller_id_rows(
+            user_id, company_id, verification_status="failed"
+        ),
+        _sd_verified_caller_id_rows(user_id, company_id),
     )
-    pending = next(
-        (row for row in rows if row.get("verification_status") == "pending"),
-        None,
-    )
+    active = active_rows[0] if active_rows else None
+    pending = pending_rows[0] if pending_rows else None
+    failed = failed_rows[0] if failed_rows else None
     active_requested_at = str((active or {}).get("requested_at") or "")
-    failed = next(
-        (
-            row for row in rows
-            if row.get("verification_status") == "failed"
-            and (
-                not active_requested_at
-                or str(row.get("requested_at") or "") > active_requested_at
-            )
-        ),
-        None,
-    )
+    if (
+        failed
+        and active_requested_at
+        and str(failed.get("requested_at") or "") <= active_requested_at
+    ):
+        failed = None
+
     return {
         "active": _caller_id_summary(active),
         "pending": _caller_id_summary(pending),
         "failed": _caller_id_summary(failed),
-        "numbers": [
-            _caller_id_summary(row)
-            for row in rows
-            if row.get("verification_status") == "verified"
-        ],
+        "numbers": [_caller_id_summary(row) for row in verified_rows],
         "verificationAvailable": _sd_caller_id_verification_configured(),
         "fallbackAvailable": bool(LUMIN_CALLER_ID),
         "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
     }
-
 
 def _caller_id_verification_is_stale(requested_at: str | None) -> bool:
     try:
