@@ -1791,7 +1791,7 @@ async def sd_dialer_voice_preview(
         audio, headers = await asyncio.to_thread(
             _voice_preview_bytes,
             LUMIN_PIPER_CATALOG_URL,
-            {"text": text, "voice": "pt_PT-tugao-medium", **profiles[voice]},
+            {"text": text, "voice": "pt_PT-tugão-medium", **profiles[voice]},
             120,
         )
         try:
