@@ -425,6 +425,46 @@ def _twilio_api_request(path: str, form: dict[str, str]) -> dict[str, Any]:
         )
 
 
+
+def _twilio_api_delete(path: str) -> None:
+    if not (TWILIO_ACCOUNT_SID and TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET):
+        raise HTTPException(status_code=503, detail="Integração de Caller ID da Twilio não configurada")
+
+    url = f"https://api.twilio.com{path}"
+    credentials = base64.b64encode(
+        f"{TWILIO_API_KEY_SID}:{TWILIO_API_KEY_SECRET}".encode("utf-8")
+    ).decode("ascii")
+    http_request = urllib.request.Request(
+        url,
+        method="DELETE",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(http_request, timeout=20) as response:
+            response.read()
+    except urllib.error.HTTPError as exc:
+        # A missing SID is already in the requested final state.
+        if exc.code == 404:
+            return
+        # Do not log Twilio's response body; it can contain account data.
+        logger.warning("Twilio caller-ID removal failed with HTTP %s", exc.code)
+        raise HTTPException(
+            status_code=502,
+            detail="A Twilio recusou a remoção. Confirma que a API key tem permissão Delete para Voice > Outgoing Caller IDs.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Twilio caller-ID removal request failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Não foi possível contactar a Twilio para remover o número.",
+        )
+
+
 def _sd_caller_id_verification_configured() -> bool:
     return bool(
         SD_DIALER_SUPABASE_URL
@@ -441,6 +481,7 @@ def _caller_id_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
     return {
+        "id": row.get("id"),
         "phoneNumber": row.get("phone_number"),
         "status": row.get("verification_status"),
         "isActive": bool(row.get("is_active")),
@@ -462,7 +503,7 @@ async def _sd_caller_id_rows(user_id: str, company_id: str) -> list[dict[str, An
             "company_id": f"eq.{company_id}",
             "select": "id,phone_number,verification_status,is_active,validation_code,requested_at,verified_at,twilio_outgoing_caller_id_sid",
             "order": "requested_at.desc",
-            "limit": "30",
+            "limit": "100",
         },
     )
     return rows if isinstance(rows, list) else []
@@ -474,6 +515,7 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
             "active": None,
             "pending": None,
             "failed": None,
+            "numbers": [],
             "verificationAvailable": False,
             "fallbackAvailable": bool(LUMIN_CALLER_ID),
             "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
@@ -507,6 +549,11 @@ async def _sd_caller_id_status(user_id: str, company_id: str) -> dict[str, Any]:
         "active": _caller_id_summary(active),
         "pending": _caller_id_summary(pending),
         "failed": _caller_id_summary(failed),
+        "numbers": [
+            _caller_id_summary(row)
+            for row in rows
+            if row.get("verification_status") == "verified"
+        ],
         "verificationAvailable": _sd_caller_id_verification_configured(),
         "fallbackAvailable": bool(LUMIN_CALLER_ID),
         "fallbackPhoneNumber": LUMIN_CALLER_ID or None,
@@ -977,6 +1024,92 @@ async def sd_dialer_caller_id(
 ):
     user_id, profile, _ = await _require_sd_context(authorization)
     return await _sd_caller_id_status(user_id, str(profile["company_id"]))
+
+
+
+@app.delete("/api/sd-dialer/caller-id/{caller_id_id}")
+async def sd_dialer_delete_caller_id(
+    caller_id_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    try:
+        caller_id_uuid = str(uuid.UUID(caller_id_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Número associado não encontrado")
+
+    user_id, profile, _ = await _require_sd_context(authorization)
+    company_id = str(profile["company_id"])
+    rows = await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "id": f"eq.{caller_id_uuid}",
+            "user_id": f"eq.{user_id}",
+            "company_id": f"eq.{company_id}",
+            "verification_status": "eq.verified",
+            "select": "id,phone_number,is_active,twilio_outgoing_caller_id_sid",
+            "limit": "1",
+        },
+    )
+    caller_id = rows[0] if isinstance(rows, list) and rows else None
+    if not caller_id:
+        raise HTTPException(status_code=404, detail="Número associado não encontrado")
+
+    twilio_sid = str(caller_id.get("twilio_outgoing_caller_id_sid") or "").strip()
+    if not twilio_sid:
+        raise HTTPException(status_code=409, detail="Este número não tem um registo Twilio que possa ser removido automaticamente.")
+
+    was_active = bool(caller_id.get("is_active"))
+    if was_active:
+        await _sd_admin_request_json(
+            "/rest/v1/sd_dialer_caller_ids",
+            {
+                "id": f"eq.{caller_id_uuid}",
+                "user_id": f"eq.{user_id}",
+                "company_id": f"eq.{company_id}",
+                "verification_status": "eq.verified",
+            },
+            method="PATCH",
+            body={"is_active": False},
+            prefer="return=minimal",
+        )
+
+    account_path = (
+        f"/2010-04-01/Accounts/{urllib.parse.quote(TWILIO_ACCOUNT_SID, safe='')}"
+        f"/OutgoingCallerIds/{urllib.parse.quote(twilio_sid, safe='')}.json"
+    )
+    try:
+        await asyncio.to_thread(_twilio_api_delete, account_path)
+    except HTTPException:
+        if was_active:
+            try:
+                await _sd_admin_request_json(
+                    "/rest/v1/sd_dialer_caller_ids",
+                    {
+                        "id": f"eq.{caller_id_uuid}",
+                        "user_id": f"eq.{user_id}",
+                        "company_id": f"eq.{company_id}",
+                        "verification_status": "eq.verified",
+                    },
+                    method="PATCH",
+                    body={"is_active": True},
+                    prefer="return=minimal",
+                )
+            except Exception as restore_error:
+                logger.error("Caller-ID activation restore failed: %s", type(restore_error).__name__)
+        raise
+
+    await _sd_admin_request_json(
+        "/rest/v1/sd_dialer_caller_ids",
+        {
+            "id": f"eq.{caller_id_uuid}",
+            "user_id": f"eq.{user_id}",
+            "company_id": f"eq.{company_id}",
+            "verification_status": "eq.verified",
+        },
+        method="DELETE",
+        prefer="return=minimal",
+    )
+    return await _sd_caller_id_status(user_id, company_id)
 
 
 @app.post("/api/sd-dialer/caller-id/verify")
