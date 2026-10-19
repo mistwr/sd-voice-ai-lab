@@ -7,6 +7,8 @@ audio the service uses its built-in neutral system voice.
 """
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from livekit.agents import tts
@@ -38,7 +40,7 @@ class ChatterboxRemoteTTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "chatterbox-multilingual-v3"
+        return "chatterbox-multilingual-pt-pt-v3"
 
     def synthesize(
         self,
@@ -79,14 +81,22 @@ class ChatterboxChunkedStream(tts.ChunkedStream):
         if self._chatterbox._audio_prompt_url:
             payload["audio_prompt_url"] = self._chatterbox._audio_prompt_url
 
-        timeout = httpx.Timeout(connect=8.0, read=55.0, write=10.0, pool=8.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{self._chatterbox._base_url}/synthesize",
-                json=payload,
-            )
-            response.raise_for_status()
-            pcm16 = response.content
+        timeout = httpx.Timeout(connect=2.0, read=8.0, write=4.0, pool=2.0)
+        try:
+            # Bound the full request, not only socket inactivity, so a slow
+            # CPU inference cannot leave a phone call silent for tens of seconds.
+            async with asyncio.timeout(6.0):
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self._chatterbox._base_url}/synthesize",
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    pcm16 = response.content
+        except TimeoutError as exc:
+            raise TimeoutError("Chatterbox exceeded the 6-second speech deadline") from exc
+        if not pcm16:
+            raise RuntimeError("Chatterbox returned empty audio")
 
         output_emitter.initialize(
             request_id=shortuuid(),
