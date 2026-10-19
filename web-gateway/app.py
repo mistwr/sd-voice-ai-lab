@@ -1507,17 +1507,6 @@ async def sd_dialer_call(
     payload: SDDialerCallRequest,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    if os.getenv("SD_DIALER_CALLS_PAUSED", "").strip().lower() in {"1", "true", "yes", "on"}:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "As chamadas de IA estão temporariamente indisponíveis. "
-                "Para apoiar a reativação, envia o valor da subscrição acordado por MB WAY "
-                "para 968 677 320 e o comprovativo por WhatsApp para o mesmo número. "
-                "Após confirmação, a ativação poderá demorar até 2 horas."
-            ),
-        )
-
     user_id, profile, token = await _require_sd_context(authorization)
     is_manual = bool(payload.phone)
     has_lead = bool(payload.lead_id)
@@ -1763,7 +1752,12 @@ async def sd_dialer_voice_preview(
     channels = 1
     media_type = "audio/pcm"
 
-    if engine == "xai":
+    use_livekit_xai = (
+        engine == "xai"
+        and os.getenv("LUMIN_TTS_PROVIDER", "opensource").strip().lower()
+        in {"xai", "livekit-xai"}
+    )
+    if use_livekit_xai:
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
         tts_engine = inference.TTS(
             model="xai/tts-1",
@@ -1797,7 +1791,7 @@ async def sd_dialer_voice_preview(
         audio, headers = await asyncio.to_thread(
             _voice_preview_bytes,
             LUMIN_PIPER_CATALOG_URL,
-            {"text": text, "voice": "pt_PT-tugao-medium", **profiles[voice]},
+            {"text": text, "voice": "pt_PT-tugão-medium", **profiles[voice]},
             120,
         )
         try:
