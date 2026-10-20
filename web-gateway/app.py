@@ -29,6 +29,7 @@ from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTru
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 from twilio.request_validator import RequestValidator
 from xai_twilio_bridge import XaiTwilioBridge
+from twilio_relay_test import TwilioRelayTestBridge
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
@@ -91,6 +92,8 @@ app.add_middleware(
 _CALLS: dict[str, dict[str, Any]] = {}
 XAI_TWILIO = XaiTwilioBridge(_CALLS)
 app.include_router(XAI_TWILIO.router)
+TWILIO_RELAY_TEST = TwilioRelayTestBridge(_CALLS)
+app.include_router(TWILIO_RELAY_TEST.router)
 _CALL_MONITORS: set[asyncio.Task[Any]] = set()
 _LAST_CALL_AT = 0.0
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -1001,6 +1004,11 @@ def _queue_call(
 ):
     global _LAST_CALL_AT
 
+    use_twilio_relay_test = TWILIO_RELAY_TEST.should_handle(source, agent_profile)
+    if use_twilio_relay_test:
+        TWILIO_RELAY_TEST.require_configured()
+        TWILIO_RELAY_TEST.assert_test_phone(phone)
+
     use_xai_twilio = XAI_TWILIO.should_handle(source, agent_profile)
     if use_xai_twilio:
         XAI_TWILIO.require_configured()
@@ -1023,7 +1031,13 @@ def _queue_call(
         "source": source,
         **(call_context or {}),
     }
-    if use_xai_twilio:
+    if use_twilio_relay_test:
+        asyncio.create_task(
+            TWILIO_RELAY_TEST.start_outbound_call(
+                _CALLS[call_id], phone, caller_id or LUMIN_CALLER_ID
+            )
+        )
+    elif use_xai_twilio:
         asyncio.create_task(
             XAI_TWILIO.start_outbound_call(
                 _CALLS[call_id], phone, caller_id or LUMIN_CALLER_ID
@@ -1042,6 +1056,8 @@ async def health():
         "outboundConfigured": bool(LUMIN_CALL_API_KEY),
         "xaiRealtimeEnabled": XAI_TWILIO.enabled,
         "xaiRealtimeConfigured": XAI_TWILIO.configured,
+        "twilioRelayTestEnabled": TWILIO_RELAY_TEST.enabled,
+        "twilioRelayTestConfigured": TWILIO_RELAY_TEST.configured,
         "platformConfigured": bool(
             LUMIN_PLATFORM_PASSWORD_HASH and LUMIN_PLATFORM_SESSION_SECRET
         ),
@@ -1552,6 +1568,9 @@ async def sd_dialer_call(
 ):
     user_id, profile, token = await _require_sd_context(authorization)
     is_manual = bool(payload.phone)
+    relay_test_mode = TWILIO_RELAY_TEST.enabled and payload.agent_id == "lumin-telecom"
+    if relay_test_mode:
+        TWILIO_RELAY_TEST.require_configured()
     if XAI_TWILIO.enabled and payload.agent_id == "lumin-telecom":
         XAI_TWILIO.require_configured()
     has_lead = bool(payload.lead_id)
@@ -1599,6 +1618,8 @@ async def sd_dialer_call(
         lead_id = str(lead.get("id") or "")
         lead_name = str(lead.get("nome") or "Cliente")
         phone = _normalise_sd_phone(str(lead.get("telefone") or ""))
+        if relay_test_mode:
+            TWILIO_RELAY_TEST.assert_test_phone(phone)
     else:
         if not payload.consent_confirmed:
             raise HTTPException(status_code=400, detail="Confirma que tens autorizacao para contactar este numero")
@@ -1606,6 +1627,8 @@ async def sd_dialer_call(
         if not lead_name:
             raise HTTPException(status_code=400, detail="Indica o nome da lead manual para a chamada e a agenda")
         phone = _normalise_sd_phone(str(payload.phone or ""))
+        if relay_test_mode:
+            TWILIO_RELAY_TEST.assert_test_phone(phone)
 
         # Manual calls get their own manual lead, so a phone match can never
         # silently replace the name entered by the operator with another lead's name.
