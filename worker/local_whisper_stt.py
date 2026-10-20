@@ -22,9 +22,9 @@ class LocalWhisperSTT(stt.STT):
     def __init__(
         self,
         *,
-        model: str = "small",
-        cpu_threads: int = 2,
-        workers: int = 2,
+        model: str = "large-v3-turbo",
+        cpu_threads: int = 4,
+        workers: int = 1,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -112,13 +112,19 @@ class LocalWhisperSTT(stt.STT):
             condition_on_previous_text=False,
             vad_filter=False,
             initial_prompt=(
-                "Português europeu. Conversa telefónica sobre serviços de telecomunicações. "
-                "Operadoras e marcas: MEO, NOS, Vodafone, DIGI, Compara Mais e Lumin. "
+                "Português europeu de chamada telefónica sobre telecomunicações. "
+                "Operadoras: MEO, NOS, Vodafone e DIGI. "
+                "Frases frequentes: 'A minha operadora é MEO', 'Pago vinte euros por mês', 'Pago oitenta euros'. "
                 "Termos: internet, televisão, telemóveis incluídos, mensalidade, fidelização, "
-                "contrato, proposta, marcação de contacto e preço mensal. "
-                "Preços: euros, pago, paga, por mês, mensalidade; valores ditos por extenso ou em algarismos. "
-                "Horários: de manhã, à tarde, às sete da manhã, às seis da tarde, às sete da tarde, "
-                "às dezoito horas, às dezanove horas, 18h e 19h."
+                "contrato, proposta e preço mensal. Valores em euros ditos por extenso ou em algarismos. "
+                "Horários naturais: sete da manhã, seis da tarde, dezoito horas e dezanove horas."
+            ),
+            hotwords=(
+                "MEO, NOS, Vodafone, DIGI, Compara Mais, Lumin, "
+                "vinte euros, vinte euros por mês, pago vinte euros, "
+                "trinta euros, quarenta euros, cinquenta euros, sessenta euros, "
+                "setenta euros, oitenta euros, noventa euros, cem euros, "
+                "de manhã, à tarde, sete da manhã, seis da tarde, dezoito horas, dezanove horas"
             ),
         )
         return " ".join(segment.text.strip() for segment in segments).strip()

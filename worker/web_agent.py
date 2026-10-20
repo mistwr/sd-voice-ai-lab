@@ -59,9 +59,9 @@ def get_local_whisper_stt() -> LocalWhisperSTT:
     global _LOCAL_WHISPER
     if _LOCAL_WHISPER is None:
         _LOCAL_WHISPER = LocalWhisperSTT(
-            model=os.getenv("LOCAL_WHISPER_MODEL", "small"),
-            cpu_threads=max(1, int(os.getenv("LOCAL_WHISPER_CPU_THREADS", "2"))),
-            workers=max(1, int(os.getenv("LOCAL_WHISPER_WORKERS", "2"))),
+            model=os.getenv("LOCAL_WHISPER_MODEL", "large-v3-turbo"),
+            cpu_threads=max(1, int(os.getenv("LOCAL_WHISPER_CPU_THREADS", "4"))),
+            workers=max(1, int(os.getenv("LOCAL_WHISPER_WORKERS", "1"))),
         )
     return _LOCAL_WHISPER
 
@@ -71,7 +71,7 @@ def get_local_vad() -> Any:
     if _LOCAL_VAD is None:
         _LOCAL_VAD = silero.VAD.load(
             min_speech_duration=0.05,
-            min_silence_duration=0.55,
+            min_silence_duration=0.75,
             prefix_padding_duration=0.35,
             sample_rate=16000,
             force_cpu=True,
@@ -354,7 +354,9 @@ qualificação de contactos e ferramentas à medida.
 RECOLHA DE OPERADORA E PREÇO
 - Quando a pergunta for sobre a mensalidade, interpreta um valor claro em euros como resposta ao preço, mesmo que a pessoa diga apenas “pago vinte euros”.
 - Guarda o valor indicado e não voltes a perguntar o preço. Se ainda faltar a operadora ou outro dado, pergunta apenas esse dado.
-- Não inventes nem alteres valores. Se o montante não se perceber, pede uma clarificação curta uma única vez e depois avança.
+- Se o nome da operadora for transcrito com som semelhante a MEO, como “meu”, “mei” ou “mel”, confirma apenas “Disse MEO?” e continua sem repetir a pergunta geral.
+- Se a resposta ao preço surgir como palavra pouco clara com som semelhante a “vinte euros”, confirma “Disse vinte euros por mês?”; não repitas “Quanto paga?”.
+- Não inventes nem alteres valores. Se o montante continuar ambíguo, pede uma clarificação curta uma única vez e depois avança.
 """
     company_name = _clean(profile.get("company"), 120).lower()
     if profile_id == "lumin-comercial" or "lumin ai" in company_name:
@@ -778,8 +780,8 @@ async def entrypoint(ctx: JobContext):
         turn_detection="vad",
         endpointing={
             "mode": "fixed",
-            "min_delay": 0.30,
-            "max_delay": 0.65,
+            "min_delay": 0.35,
+            "max_delay": 0.85,
         },
         interruption={
             "enabled": True,
@@ -962,6 +964,6 @@ if __name__ == "__main__":
             prewarm_fnc=prewarm,
             num_idle_processes=1,
             initialize_process_timeout=30.0,
-            job_memory_warn_mb=900,
+            job_memory_warn_mb=3500,
         )
     )
