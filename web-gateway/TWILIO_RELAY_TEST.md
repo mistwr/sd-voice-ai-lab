@@ -24,7 +24,7 @@ The Twilio account must have ConversationRelay enabled in Voice settings and hav
 4. The test agent should say “Percebi: …” and read back what Twilio transcribed. Confirm whether it heard **MEO**, **vinte euros**, **amanhã**, and **sete da manhã** correctly. Repeat once at normal speaking speed, then once with a less clear “pago 20 euros”.
 5. Say “terminar teste” to end the session. Confirm the call moves to ended in the SD Dialer.
 
-The call row is written to the existing call history with recording disabled and transcript consent marked `not_requested`. Prompt text is not written to Supabase or application logs. Twilio bills the PSTN call and ConversationRelay usage.
+The call row is written to the existing call history with recording disabled and transcript consent marked `pending`. Prompt text is not written to Supabase or application logs. Twilio bills the PSTN call and ConversationRelay usage.
 
 ## After the smoke test
 
