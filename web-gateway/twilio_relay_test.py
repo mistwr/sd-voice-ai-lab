@@ -235,7 +235,7 @@ class TwilioRelayTestBridge:
             self.assert_test_phone(phone)
             state["status"] = "preparing"
             state["transport"] = "twilio-relay-test"
-            state["transcriptConsentStatus"] = "not_requested"
+            state["transcriptConsentStatus"] = "pending"
             state["recordingEnabled"] = False
             state["callRecordCreated"] = await self._create_call_row(state, phone)
             if not state["callRecordCreated"]:
@@ -305,10 +305,10 @@ class TwilioRelayTestBridge:
         call_id: str,
         state: dict[str, Any],
     ) -> None:
-        await websocket.accept()
         if not await self._verify_websocket(websocket):
             await websocket.close(code=1008)
             return
+        await websocket.accept()
         try:
             setup = json.loads(await websocket.receive_text())
             custom = setup.get("customParameters") or {}
@@ -344,7 +344,7 @@ class TwilioRelayTestBridge:
                 )
         except WebSocketDisconnect:
             logger.info("ConversationRelay WebSocket disconnected call_id=%s", call_id)
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
             logger.warning(
                 "ConversationRelay message failed call_id=%s error_type=%s",
                 call_id,
@@ -415,7 +415,7 @@ class TwilioRelayTestBridge:
             "created_by": _clean(state.get("sdUserId"), 80) or None,
             "lead_id": _clean(state.get("leadId"), 80) or None,
             "source": _clean(state.get("source"), 80) or "sd-dialer",
-            "transcript_consent_status": "not_requested",
+            "transcript_consent_status": "pending",
         }
         try:
             await asyncio.to_thread(
