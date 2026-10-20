@@ -1,9 +1,11 @@
+import asyncio
+import json
 import os
 import time
 import unittest
 from unittest.mock import patch
 
-from xai_twilio_bridge import XaiTwilioBridge, _consent_answer, _pt_number
+from xai_twilio_bridge import XaiTwilioBridge, _consent_answer, _pt_number, _pt_time
 
 
 class XaiTwilioBridgeTests(unittest.TestCase):
@@ -28,6 +30,38 @@ class XaiTwilioBridgeTests(unittest.TestCase):
         self.assertEqual(_pt_number(18, feminine=True), "dezoito")
         self.assertEqual(_pt_number(21, feminine=True), "vinte e uma")
         self.assertEqual(_pt_number(31), "trinta e um")
+
+    def test_confirmation_times_are_unambiguous_in_portuguese(self):
+        self.assertEqual(_pt_time(7), "às sete horas da manhã")
+        self.assertEqual(_pt_time(7, 30), "às sete horas e meia da manhã")
+        self.assertEqual(_pt_time(19), "às dezanove horas")
+        self.assertEqual(_pt_time(12, 30), "ao meio-dia e meia")
+        self.assertEqual(_pt_time(0), "à meia-noite")
+
+    def test_realtime_session_biases_portuguese_and_slows_output_slightly(self):
+        class FakeRealtimeSocket:
+            def __init__(self):
+                self.incoming = iter((
+                    json.dumps({"type": "session.created"}),
+                    json.dumps({"type": "session.updated"}),
+                ))
+                self.sent = []
+
+            async def recv(self):
+                return next(self.incoming)
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        bridge = XaiTwilioBridge({})
+        socket = FakeRealtimeSocket()
+        asyncio.run(bridge._configure_xai(socket, {"agent": {}}))
+        session = socket.sent[0]["session"]
+        transcription = session["audio"]["input"]["transcription"]
+        self.assertEqual(transcription["language_hint"], "pt-PT")
+        self.assertIn("MEO", transcription["keyterms"])
+        self.assertEqual(session["audio"]["output"]["speed"], 0.92)
+        self.assertEqual(session["replace"]["Compara+"], "Compara mais")
 
     def test_only_telecom_sd_dialer_calls_use_direct_transport(self):
         with patch.dict(os.environ, {"LUMIN_VOICE_TRANSPORT": "xai-twilio"}):
