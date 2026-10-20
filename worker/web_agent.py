@@ -166,7 +166,7 @@ def xai_like_open_source_tts(
     kokoro_url: str,
 ) -> tuple[Any, str]:
     """Use the installed European Portuguese Kokoro voice with a local Piper fallback."""
-    local_piper = voice_for_profile(base_tts, "commercial")
+    local_piper = voice_for_profile(base_tts, "clear")
     if not kokoro_url:
         logger.warning("Kokoro URL missing; using local Piper commercial PT-PT")
         return local_piper, "piper-commercial"
