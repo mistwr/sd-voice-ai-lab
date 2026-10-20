@@ -141,11 +141,12 @@ class XaiTwilioBridge:
             state["twilioCallSid"] = _clean(form.get("CallSid"), 80)
             token = self._stream_token(call_id)
             ws_base = "wss://" + self.public_url.removeprefix("https://").removeprefix("http://")
-            stream_url = f"{ws_base}/api/xai-twilio/stream/{urllib.parse.quote(call_id)}?token={urllib.parse.quote(token)}"
+            stream_url = f"{ws_base}/api/xai-twilio/stream/{urllib.parse.quote(call_id)}"
 
             root = ET.Element("Response")
             connect = ET.SubElement(root, "Connect")
-            ET.SubElement(connect, "Stream", {"url": stream_url})
+            stream = ET.SubElement(connect, "Stream", {"url": stream_url})
+            ET.SubElement(stream, "Parameter", {"name": "token", "value": token})
             ET.SubElement(root, "Hangup")
             body = ET.tostring(root, encoding="unicode")
             return Response(content=f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>{body}", media_type="application/xml")
@@ -195,14 +196,13 @@ class XaiTwilioBridge:
 
         @self._router.websocket("/api/xai-twilio/stream/{call_id}")
         async def media_stream(websocket: WebSocket, call_id: str):
-            if not self.configured or not self._valid_stream_token(call_id, websocket.query_params.get("token", "")):
+            if not self.configured:
                 await websocket.close(code=1008)
                 return
             state = self.calls.get(call_id)
-            if not state or state.get("streamClaimed"):
+            if not state:
                 await websocket.close(code=1008)
                 return
-            state["streamClaimed"] = True
             await self._handle_stream(websocket, call_id, state)
 
     def _public_request_url(self, request: Request) -> str:
@@ -310,6 +310,7 @@ class XaiTwilioBridge:
     async def _handle_stream(self, websocket: WebSocket, call_id: str, state: dict[str, Any]) -> None:
         await websocket.accept()
         stream_sid = ""
+        authenticated = False
         xai = None
         mark_events: dict[str, asyncio.Event] = {}
         db_tasks: set[asyncio.Task[Any]] = set()
@@ -368,6 +369,15 @@ class XaiTwilioBridge:
                 message = json.loads(await asyncio.wait_for(websocket.receive_text(), timeout=remaining))
                 if message.get("event") == "start":
                     start = message.get("start") or {}
+                    custom_parameters = start.get("customParameters") or {}
+                    if not self._valid_stream_token(call_id, _clean(custom_parameters.get("token"), 160)):
+                        await websocket.close(code=1008)
+                        return
+                    if state.get("streamClaimed"):
+                        await websocket.close(code=1008)
+                        return
+                    state["streamClaimed"] = True
+                    authenticated = True
                     stream_sid = _clean(start.get("streamSid"), 80)
                     state["twilioCallSid"] = _clean(start.get("callSid"), 80) or state.get("twilioCallSid")
                     if not stream_sid:
@@ -538,6 +548,9 @@ class XaiTwilioBridge:
                 type(exc).__name__,
             )
         finally:
+            if not authenticated:
+                state["streamClaimed"] = False
+                return
             state["streamConnected"] = False
             if xai is not None:
                 try:
