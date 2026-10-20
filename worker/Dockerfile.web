@@ -21,7 +21,7 @@ RUN mkdir -p /app/voices /opt/hf-cache \
     && python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8', cpu_threads=2, num_workers=2)" \
     && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx?download=true','/app/voices/lumin-ptpt.onnx'); urllib.request.urlretrieve('https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json?download=true','/app/voices/lumin-ptpt.onnx.json')"
 
-COPY web_agent.py lead_capture.py supabase_client.py local_whisper_stt.py piper_tts.py chatterbox_tts.py kokoro_remote_tts.py openvoice_tts.py piper_catalog_tts.py ./
+COPY web_agent.py lead_capture.py supabase_client.py local_whisper_stt.py audio_level.py piper_tts.py chatterbox_tts.py kokoro_remote_tts.py openvoice_tts.py piper_catalog_tts.py ./
 
 RUN python web_agent.py download-files || true
 

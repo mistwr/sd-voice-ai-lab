@@ -4,6 +4,8 @@ import asyncio
 
 import httpx
 
+from audio_level import boost_pcm16
+
 from livekit.agents import tts
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
@@ -69,7 +71,7 @@ class KokoroChunkedStream(tts.ChunkedStream):
                         json={"text": self._input_text},
                     )
                     response.raise_for_status()
-                    pcm16 = response.content
+                    pcm16 = boost_pcm16(response.content)
         except TimeoutError as exc:
             raise TimeoutError("Kokoro synthesis exceeded the 4-second total deadline") from exc
 

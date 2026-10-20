@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 
 import onnxruntime
+
+from audio_level import boost_pcm16
 from livekit.agents import tts
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
@@ -231,7 +233,7 @@ class PiperChunkedStream(tts.ChunkedStream):
                     break
                 if isinstance(item, BaseException):
                     raise item
-                output_emitter.push(item)
+                output_emitter.push(boost_pcm16(item))
             await producer
             output_emitter.flush()
         finally:
