@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
+from fastapi import HTTPException
 from twilio_relay_test import TwilioRelayTestBridge, _echo_reply
 
 
@@ -33,8 +34,9 @@ class TwilioRelayTestBridgeTests(unittest.TestCase):
     def test_only_configured_phone_is_allowed(self):
         bridge = self._bridge()
         bridge.assert_test_phone("+351 912 345 678")
-        with self.assertRaises(Exception):
+        with self.assertRaises(HTTPException) as error:
             bridge.assert_test_phone("+351912345679")
+        self.assertEqual(error.exception.status_code, 403)
 
     def test_signed_stream_token_is_bound_to_call_id_and_expiry(self):
         bridge = self._bridge()
@@ -52,7 +54,7 @@ class TwilioRelayTestBridgeTests(unittest.TestCase):
         self.assertEqual(relay.attrib["speechModel"], "telephony")
         self.assertEqual(relay.find("Parameter").attrib, {"name": "token", "value": "token"})
 
-    def test_echo_confirms_the_words_heard_and_has_no_transcript_storage(self):
+    def test_echo_confirms_the_words_heard_and_recognises_the_end_phrase(self):
         self.assertEqual(
             _echo_reply("Sou cliente MEO, pago 20 euros e prefiro amanhã às 7."),
             "Percebi: Sou cliente MEO, pago 20 euros e prefiro amanhã às 7. Está correto? Se não, diga a frase novamente.",
