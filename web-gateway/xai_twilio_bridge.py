@@ -81,6 +81,31 @@ def _pt_number(number: int, *, feminine: bool = False) -> str:
     return tens[ten] if unit == 0 else f"{tens[ten]} e {units[unit]}"
 
 
+def _pt_time(hour: int, minute: int = 0) -> str:
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError("hour and minute must be within a day")
+
+    if hour == 0:
+        phrase = "à meia-noite"
+    elif hour == 12:
+        phrase = "ao meio-dia"
+    elif hour == 1:
+        phrase = "à uma hora"
+    else:
+        phrase = f"às {_pt_number(hour, feminine=True)} horas"
+
+    if minute == 30:
+        phrase += " e meia"
+    elif minute == 1:
+        phrase += " e um minuto"
+    elif minute:
+        phrase += f" e {_pt_number(minute)} minutos"
+
+    if 0 < hour < 12:
+        phrase += " da manhã"
+    return phrase
+
+
 class XaiTwilioBridge:
     """Direct Twilio Media Streams to xAI Realtime bridge; no LiveKit inference."""
 
@@ -114,7 +139,7 @@ class XaiTwilioBridge:
             self.enabled
             and self.xai_key
             and self.public_url.startswith("https://")
-            and self.stream_secret
+            and len(self.stream_secret.encode("utf-8")) >= 32
             and self.account_sid
             and self.api_key_sid
             and self.api_key_secret
@@ -323,7 +348,6 @@ class XaiTwilioBridge:
         xai = None
         mark_events: dict[str, asyncio.Event] = {}
         db_tasks: set[asyncio.Task[Any]] = set()
-        pending_user: dict[str, str] = {}
         processed_user_items: set[str] = set()
         pending_agent: dict[str, str] = {}
         processed_agent_responses: set[str] = set()
@@ -476,10 +500,8 @@ class XaiTwilioBridge:
                             })
                         continue
                     if kind in {"conversation.item.input_audio_transcription.updated", "conversation.item.input_audio_transcription.delta"}:
-                        item_id = _clean(event.get("item_id") or (event.get("item") or {}).get("id"), 120)
-                        text_value = _clean(event.get("transcript") or event.get("delta"), 4000)
-                        if item_id and text_value and item_id not in processed_user_items:
-                            pending_user[item_id] = text_value
+                        # These are interim/cumulative recognition snapshots. Only the
+                        # completed event is safe to persist as the caller's full answer.
                         continue
                     if kind == "conversation.item.input_audio_transcription.completed":
                         item_id = _clean(event.get("item_id"), 120)
@@ -488,18 +510,8 @@ class XaiTwilioBridge:
                             await self._process_user_transcript(state, text_value, schedule)
                             if item_id:
                                 processed_user_items.add(item_id)
-                        if item_id:
-                            pending_user.pop(item_id, None)
-                        continue
-                    if kind == "input_audio_buffer.committed":
-                        item_id = _clean(event.get("item_id"), 120)
                         continue
                     if kind == "response.created":
-                        for item_id in list(pending_user):
-                            text_value = pending_user.pop(item_id)
-                            if item_id not in processed_user_items:
-                                await self._process_user_transcript(state, text_value, schedule)
-                                processed_user_items.add(item_id)
                         active_response_id = _clean((event.get("response") or {}).get("id"), 120) or active_response_id
                         continue
                     if kind in {"response.output_audio_transcript.delta", "response.audio_transcript.delta"}:
@@ -621,10 +633,26 @@ class XaiTwilioBridge:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcmu"},
-                    "transcription": {"model": "grok-transcribe", "language_hint": "pt-PT"},
+                    "transcription": {
+                        "model": "grok-transcribe",
+                        "language_hint": "pt-PT",
+                        "keyterms": [
+                            "MEO",
+                            "NOS",
+                            "Vodafone",
+                            "Compara+",
+                            "internet",
+                            "fibra",
+                            "televisão",
+                            "telemóveis",
+                            "fidelização",
+                            "euros",
+                        ],
+                    },
                 },
-                "output": {"format": {"type": "audio/pcmu"}},
+                "output": {"format": {"type": "audio/pcmu"}, "speed": 0.92},
             },
+            "replace": {"Compara+": "Compara mais"},
             "turn_detection": {"type": "server_vad"},
         }
         follow_up_enabled = bool(
@@ -678,7 +706,7 @@ Oferta permitida: {offer}
 Objeções e recusas: {objections}
 Guião adicional: {notes}
 Tom: {tone}
-Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o que a pessoa já disse e nunca repitas uma pergunta respondida. Confirma apenas uma vez quando não entenderes uma informação importante. Diz horas por extenso em português de Portugal. Não inventes preços, poupanças, cobertura ou condições. Só confirmes uma marcação depois de schedule_follow_up devolver sucesso. Se a pessoa pedir para não voltar a ser contactada, respeita o pedido e termina a chamada."""
+Fala com dicção nítida e ligeiramente pausada, em português de Portugal, com frases curtas e uma pergunta de cada vez. Escuta a resposta completa antes de responder. Aproveita todos os dados que a pessoa der na mesma frase (por exemplo, operadora e mensalidade) e nunca repitas uma pergunta já respondida. Se faltar ou não perceberes um dado importante, confirma só esse dado uma vez. Pronuncia valores com euros e horas por extenso; para horas da manhã, diz explicitamente "da manhã". Não inventes preços, poupanças, cobertura ou condições. Só confirmes uma marcação depois de schedule_follow_up devolver sucesso. Se a pessoa pedir para não voltar a ser contactada, respeita o pedido e termina a chamada."""
 
     def _disclosure(self, state: dict[str, Any]) -> str:
         name = _clean(state.get("name"), 80)
@@ -800,22 +828,7 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
 
         weekdays = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
         months = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
-        if local.hour == 0:
-            spoken_time = "à meia-noite"
-        elif local.hour == 12:
-            spoken_time = "ao meio-dia"
-        elif local.hour == 1:
-            spoken_time = "à uma hora"
-        else:
-            spoken_time = f"às {_pt_number(local.hour, feminine=True)} horas"
-        if local.minute:
-            if local.minute == 30:
-                minute_phrase = "meia"
-            elif local.minute == 1:
-                minute_phrase = "um minuto"
-            else:
-                minute_phrase = f"{_pt_number(local.minute)} minutos"
-            spoken_time += f" e {minute_phrase}"
+        spoken_time = _pt_time(local.hour, local.minute)
         spoken = f"{weekdays[local.weekday()]}, {local.day} de {months[local.month - 1]}, {spoken_time}"
         state["followUpConfirmation"] = f"Marcação confirmada para {spoken}."
         return {"ok": True, "message": state["followUpConfirmation"]}
