@@ -91,7 +91,7 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"€\s*(\d+(?:[.,]\d{1,2})?)", r"\1 euros", text)
     text = re.sub(r"(\d+(?:[.,]\d{1,2})?)\s*€", r"\1 euros", text)
     text = re.sub(
-        r"(?<!\w)(?P<hour>[01]?\d|2[0-3])\s*(?:h|:)\s*(?P<minute>[0-5]\d)?(?:h)?(?:\s+(?P<period>(?:da|de)\s+(?:manhã|tarde|noite)))?(?!\w)",
+        r"(?<!\w)(?P<hour>[01]?\d|2[0-3])\s*(?:horas?|h|:)\s*(?P<minute>[0-5]\d)?(?:h)?(?:\s+(?P<period>(?:da|de)\s+(?:manhã|tarde|noite)))?(?!\w)",
         _format_clock_time,
         text,
         flags=re.IGNORECASE,
