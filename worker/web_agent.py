@@ -92,6 +92,10 @@ def create_llm() -> Any:
             model=model,
             base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
             api_key=api_key,
+            extra_kwargs={
+                "max_completion_tokens": 192,
+                "reasoning_effort": "low",
+            },
         )
     if provider in {"livekit", "livekit-inference"}:
         model = os.getenv("LIVEKIT_LLM_MODEL", "openai/gpt-5.6-luna")
@@ -274,6 +278,15 @@ def build_instructions(
 ) -> str:
     profile = _campaign_profile(profile)
 
+    campaign_signal = " ".join(
+        _clean(profile.get(key), 400)
+        for key in ("id", "name", "company", "description", "objective", "product")
+    ).casefold()
+    is_telecom_profile = "telecom" in campaign_signal or (
+        "compara" in campaign_signal
+        and any(term in campaign_signal for term in ("operadora", "internet", "televis", "mensalidade"))
+    )
+
     base = """
 Tu és o Lumin, um assistente virtual de voz de inteligência artificial.
 
@@ -314,6 +327,19 @@ REGRAS GERAIS
 - Não pressiones a pessoa. Mantém a identificação feita no início sem a repetires, salvo se a pessoa perguntar, e respeita imediatamente um pedido para terminar a chamada.
 """.strip()
 
+    if is_telecom_profile:
+        base = """
+És o Lumin, assistente virtual de chamadas comerciais. Fala em português de Portugal.
+A abertura automática já foi dita: não a repitas. Responde diretamente à última frase.
+Usa frases curtas, claras e respeitosas; faz uma pergunta de cada vez.
+Guarda os dados já respondidos e não repitas perguntas. Se a transcrição parecer errada,
+aproveita o que está claro e confirma uma única vez com opções concretas.
+Para operadora: “Disse MEO, NOS, Vodafone ou DIGI?” Para preço: confirma o valor
+que ouviu, em vez de voltar a perguntar quanto paga. Diz horas por extenso
+(“às seis da tarde”). Não inventes preços, poupanças ou condições.
+Se a pessoa recusar, agradece e termina sem insistir.
+""".strip()
+
     if not profile:
         return base + """
 
@@ -332,16 +358,33 @@ qualificação de contactos e ferramentas à medida.
             flags=re.IGNORECASE,
         )
 
+    section_limits = {
+        "description": 900,
+        "objective": 500,
+        "product": 1200,
+        "offer": 1200,
+        "objections": 1800,
+        "notes": 2200,
+    }
+    if is_telecom_profile:
+        section_limits.update({
+            "description": 450,
+            "objective": 350,
+            "product": 700,
+            "offer": 700,
+            "objections": 700,
+            "notes": 1100,
+        })
     sections = [
         ("NOME DO AGENTE", _clean(profile.get("name"), 80)),
         ("EMPRESA / MARCA", _clean(profile.get("company"), 120)),
-        ("DESCRIÇÃO / PERSONALIDADE", _clean(profile.get("description"), 900)),
-        ("OBJETIVO DA CHAMADA", _clean(profile.get("objective"), 500)),
-        ("PRODUTO / SERVIÇO", _clean(profile.get("product"), 1200)),
-        ("OFERTA / CONDIÇÕES AUTORIZADAS", _clean(profile.get("offer"), 1200)),
+        ("DESCRIÇÃO / PERSONALIDADE", _clean(profile.get("description"), section_limits["description"])),
+        ("OBJETIVO DA CHAMADA", _clean(profile.get("objective"), section_limits["objective"])),
+        ("PRODUTO / SERVIÇO", _clean(profile.get("product"), section_limits["product"])),
+        ("OFERTA / CONDIÇÕES AUTORIZADAS", _clean(profile.get("offer"), section_limits["offer"])),
         ("ABERTURA PRETENDIDA", opening_context),
-        ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), 1800)),
-        ("NOTAS DA EMPRESA", _clean(profile.get("notes"), 2200)),
+        ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), section_limits["objections"])),
+        ("NOTAS DA EMPRESA", _clean(profile.get("notes"), section_limits["notes"])),
         ("TOM", _tone_without_voice_tag(profile)),
     ]
     context = "\n".join(f"{title}:\n{text}" for title, text in sections if text)
@@ -349,7 +392,7 @@ qualificação de contactos e ferramentas à medida.
     sales_mode = ""
     telecom_mode = ""
     profile_id = _clean(profile.get("id"), 80).lower()
-    if profile_id == "lumin-telecom":
+    if is_telecom_profile:
         telecom_mode = """
 RECOLHA DE OPERADORA E PREÇO
 - Quando a pergunta for sobre a mensalidade, interpreta um valor claro em euros como resposta ao preço, mesmo que a pessoa diga apenas “pago vinte euros”.
@@ -813,11 +856,11 @@ async def entrypoint(ctx: JobContext):
     )
 
     llm_conn_options = APIConnectOptions(
-        max_retry=3,
-        # The provider's 429 response on this project asked for a retry after
-        # 945 ms. Wait slightly longer before retrying SD Dialer turns.
-        retry_interval=1.2 if is_sd_dialer_call else 2.0,
-        timeout=10.0,
+        # Groq asked for 3.5–4.8 seconds after the 429s seen on these calls.
+        # Retry once after that window instead of exhausting three early retries.
+        max_retry=1 if is_sd_dialer_call else 3,
+        retry_interval=5.0 if is_sd_dialer_call else 2.0,
+        timeout=12.0,
     )
     session = AgentSession(
         vad=local_vad,
