@@ -57,11 +57,9 @@ def _fold(value: str) -> str:
 
 def _consent_answer(value: str) -> str | None:
     folded = _fold(value)
-    no = (
-        folded in {"nao", "nao obrigado", "nao obrigada", "prefiro que nao"}
-        or folded.startswith(("nao autorizo", "nao aceito", "nao quero", "prefiro nao"))
-    )
-    if no:
+    if "nao" in folded.split():
+        if any(term in folded for term in ("nao sei", "nao percebi", "nao entendi")):
+            return None
         return "denied"
     yes = (
         folded in {"sim", "claro", "aceito", "autorizo", "pode", "esta bem", "pode ser"}
@@ -69,6 +67,18 @@ def _consent_answer(value: str) -> str | None:
         or any(term in folded for term in ("autorizo a transcricao", "pode guardar", "pode registar", "aceito a transcricao"))
     )
     return "granted" if yes else None
+
+
+def _pt_number(number: int, *, feminine: bool = False) -> str:
+    units = ("zero", "uma" if feminine else "um", "duas" if feminine else "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove")
+    teens = ("dez", "onze", "doze", "treze", "catorze", "quinze", "dezasseis", "dezassete", "dezoito", "dezanove")
+    tens = {2: "vinte", 3: "trinta", 4: "quarenta", 5: "cinquenta"}
+    if number < 10:
+        return units[number]
+    if number < 20:
+        return teens[number - 10]
+    ten, unit = divmod(number, 10)
+    return tens[ten] if unit == 0 else f"{tens[ten]} e {units[unit]}"
 
 
 class XaiTwilioBridge:
@@ -91,7 +101,6 @@ class XaiTwilioBridge:
         self.auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
         self.supabase_url = os.getenv("SD_DIALER_SUPABASE_URL", "").rstrip("/")
         self.supabase_key = os.getenv("SD_DIALER_SUPABASE_SERVICE_ROLE_KEY", "")
-        self._db_tasks: set[asyncio.Task[Any]] = set()
         self._router = APIRouter()
         self._register_routes()
 
@@ -315,7 +324,9 @@ class XaiTwilioBridge:
         mark_events: dict[str, asyncio.Event] = {}
         db_tasks: set[asyncio.Task[Any]] = set()
         pending_user: dict[str, str] = {}
+        processed_user_items: set[str] = set()
         pending_agent: dict[str, str] = {}
+        processed_agent_responses: set[str] = set()
         pending_tool_calls: dict[str, list[dict[str, Any]]] = {}
         completed_responses: set[str] = set()
         tool_responses_started: set[str] = set()
@@ -467,25 +478,28 @@ class XaiTwilioBridge:
                     if kind in {"conversation.item.input_audio_transcription.updated", "conversation.item.input_audio_transcription.delta"}:
                         item_id = _clean(event.get("item_id") or (event.get("item") or {}).get("id"), 120)
                         text_value = _clean(event.get("transcript") or event.get("delta"), 4000)
-                        if item_id and text_value:
+                        if item_id and text_value and item_id not in processed_user_items:
                             pending_user[item_id] = text_value
                         continue
                     if kind == "conversation.item.input_audio_transcription.completed":
                         item_id = _clean(event.get("item_id"), 120)
                         text_value = _clean(event.get("transcript"), 4000)
-                        if text_value:
+                        if text_value and (not item_id or item_id not in processed_user_items):
                             await self._process_user_transcript(state, text_value, schedule)
+                            if item_id:
+                                processed_user_items.add(item_id)
                         if item_id:
                             pending_user.pop(item_id, None)
                         continue
                     if kind == "input_audio_buffer.committed":
                         item_id = _clean(event.get("item_id"), 120)
-                        if item_id and item_id in pending_user:
-                            state.setdefault("pendingUserItemIds", set()).add(item_id)
                         continue
                     if kind == "response.created":
                         for item_id in list(pending_user):
-                            await self._process_user_transcript(state, pending_user.pop(item_id), schedule)
+                            text_value = pending_user.pop(item_id)
+                            if item_id not in processed_user_items:
+                                await self._process_user_transcript(state, text_value, schedule)
+                                processed_user_items.add(item_id)
                         active_response_id = _clean((event.get("response") or {}).get("id"), 120) or active_response_id
                         continue
                     if kind in {"response.output_audio_transcript.delta", "response.audio_transcript.delta"}:
@@ -496,9 +510,11 @@ class XaiTwilioBridge:
                         continue
                     if kind in {"response.output_audio_transcript.done", "response.audio_transcript.done"}:
                         response_id = _clean(event.get("response_id") or active_response_id, 120)
-                        text_value = _clean(event.get("transcript") or event.get("text") or pending_agent.pop(response_id, ""), 4000)
-                        if text_value:
+                        delta_text = pending_agent.pop(response_id, "")
+                        text_value = _clean(event.get("transcript") or event.get("text") or delta_text, 4000)
+                        if text_value and response_id not in processed_agent_responses:
                             await self._process_agent_transcript(state, text_value, schedule)
+                            processed_agent_responses.add(response_id)
                         continue
                     if kind == "response.function_call_arguments.done":
                         response_id = _clean(event.get("response_id") or active_response_id, 120)
@@ -511,8 +527,9 @@ class XaiTwilioBridge:
                         response_id = _clean(response.get("id") or active_response_id, 120)
                         completed_responses.add(response_id)
                         text_value = pending_agent.pop(response_id, "")
-                        if text_value:
+                        if text_value and response_id not in processed_agent_responses:
                             await self._process_agent_transcript(state, text_value, schedule)
+                            processed_agent_responses.add(response_id)
                         if pending_tool_calls.get(response_id):
                             schedule(dispatch_tool_calls(response_id))
                         continue
@@ -523,6 +540,7 @@ class XaiTwilioBridge:
                             call_id,
                             _clean(error.get("code") or error.get("type"), 80),
                         )
+                        raise RuntimeError("xAI Realtime returned an error")
 
             twilio_task = asyncio.create_task(from_twilio())
             xai_task = asyncio.create_task(from_xai())
@@ -538,6 +556,8 @@ class XaiTwilioBridge:
                     exception = task.exception()
                     if exception:
                         raise exception
+                    if task is xai_task:
+                        raise RuntimeError("xAI Realtime WebSocket closed")
         except WebSocketDisconnect:
             pass
         except Exception as exc:
@@ -547,6 +567,10 @@ class XaiTwilioBridge:
                 call_id,
                 type(exc).__name__,
             )
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
         finally:
             if not authenticated:
                 state["streamClaimed"] = False
@@ -555,6 +579,11 @@ class XaiTwilioBridge:
             if xai is not None:
                 try:
                     await xai.close()
+                except Exception:
+                    pass
+            if authenticated:
+                try:
+                    await websocket.close(code=1000)
                 except Exception:
                     pass
             for task in list(db_tasks):
@@ -664,12 +693,7 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
             if decision == "granted":
                 state["transcriptConsentStatus"] = "granted"
                 state["transcriptConsentAt"] = datetime.now(timezone.utc).isoformat()
-                schedule(self._update_call_row(
-                    state,
-                    transcript_consent_status="granted",
-                    transcript_consent_at=state["transcriptConsentAt"],
-                ))
-                schedule(self._insert_transcript(state, "client", text_value))
+                schedule(self._grant_and_record_transcript(state, "client", text_value))
             elif decision == "denied":
                 state["transcriptConsentStatus"] = "denied"
                 schedule(self._update_call_row(state, transcript_consent_status="denied"))
@@ -681,6 +705,15 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
         if state.get("transcriptConsentStatus") == "granted":
             schedule(self._insert_transcript(state, "agent", _clean(text_value, 4000)))
 
+    async def _grant_and_record_transcript(self, state: dict[str, Any], speaker: str, text_value: str) -> None:
+        updated = await self._update_call_row(
+            state,
+            transcript_consent_status="granted",
+            transcript_consent_at=state.get("transcriptConsentAt"),
+        )
+        if updated:
+            await self._insert_transcript(state, speaker, text_value)
+
     async def _run_tool(self, state: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
         name = _clean(call.get("name"), 80)
         try:
@@ -689,6 +722,10 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
             arguments = {}
         if name != "schedule_follow_up":
             return {"ok": False, "message": "Ferramenta desconhecida."}
+        if state.get("followUpConfirmation"):
+            return {"ok": True, "message": state["followUpConfirmation"]}
+        if state.get("followUpBusy"):
+            return {"ok": False, "message": "A marcação está a ser confirmada. Aguarda pelo resultado."}
         try:
             local = datetime.fromisoformat(_clean(arguments.get("scheduled_at"), 80).replace("Z", "+00:00"))
             if local.tzinfo is None:
@@ -708,6 +745,7 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
         if not (lead_id and company_id and partner_id and self.supabase_url and self.supabase_key):
             return {"ok": False, "message": "Não foi possível confirmar na agenda."}
 
+        state["followUpBusy"] = True
         try:
             await asyncio.to_thread(
                 self._supabase_request,
@@ -732,11 +770,30 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
         except Exception as exc:
             logger.warning("xAI follow-up write failed call_id=%s error_type=%s", state.get("callId"), type(exc).__name__)
             return {"ok": False, "message": "Não consegui confirmar a marcação. Não confirmes que ficou marcada."}
+        finally:
+            state["followUpBusy"] = False
 
         weekdays = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
         months = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
-        spoken = f"{weekdays[local.weekday()]}, {local.day} de {months[local.month - 1]}, às {local.hour} horas"
-        return {"ok": True, "message": f"Marcação confirmada para {spoken}."}
+        if local.hour == 0:
+            spoken_time = "à meia-noite"
+        elif local.hour == 12:
+            spoken_time = "ao meio-dia"
+        elif local.hour == 1:
+            spoken_time = "à uma hora"
+        else:
+            spoken_time = f"às {_pt_number(local.hour, feminine=True)} horas"
+        if local.minute:
+            if local.minute == 30:
+                minute_phrase = "meia"
+            elif local.minute == 1:
+                minute_phrase = "um minuto"
+            else:
+                minute_phrase = f"{_pt_number(local.minute)} minutos"
+            spoken_time += f" e {minute_phrase}"
+        spoken = f"{weekdays[local.weekday()]}, {local.day} de {months[local.month - 1]}, {spoken_time}"
+        state["followUpConfirmation"] = f"Marcação confirmada para {spoken}."
+        return {"ok": True, "message": state["followUpConfirmation"]}
 
     async def _create_call_row(self, state: dict[str, Any], phone: str) -> bool:
         company_id = _clean(state.get("companyId"), 80)
@@ -770,12 +827,12 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
             logger.warning("xAI call history create failed call_id=%s error_type=%s", state.get("callId"), type(exc).__name__)
             return False
 
-    async def _update_call_row(self, state: dict[str, Any], **fields: Any) -> None:
+    async def _update_call_row(self, state: dict[str, Any], **fields: Any) -> bool:
         if not state.get("callRecordCreated"):
-            return
+            return False
         call_id = _clean(state.get("callId"), 80)
         if not call_id or not self.supabase_url or not self.supabase_key:
-            return
+            return False
         fields["updated_at"] = datetime.now(timezone.utc).isoformat()
         try:
             await asyncio.to_thread(
@@ -786,8 +843,10 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
                 body=fields,
                 prefer="return=minimal",
             )
+            return True
         except Exception as exc:
             logger.warning("xAI call history update failed call_id=%s error_type=%s", call_id, type(exc).__name__)
+            return False
 
     async def _insert_transcript(self, state: dict[str, Any], speaker: str, text_value: str) -> None:
         if (
