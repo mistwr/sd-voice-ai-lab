@@ -17,7 +17,21 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference, tts
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIConnectOptions,
+    JobContext,
+    JobProcess,
+    RunContext,
+    TurnHandlingOptions,
+    WorkerOptions,
+    cli,
+    function_tool,
+    inference,
+    tts,
+)
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import openai as openai_plugin, silero
 
 from local_whisper_stt import LocalWhisperSTT
@@ -732,13 +746,12 @@ async def entrypoint(ctx: JobContext):
             "resume_false_interruption": True,
         },
         preemptive_generation={
-            "enabled": True,
-            # Piper is cheap enough to synthesize speculatively. For neural
-            # cloning engines keep only LLM pre-generation to avoid wasting
-            # expensive TTS when the transcript changes.
-            "preemptive_tts": fast_tts,
+            # Calls share the provider's tokens-per-minute limit. Avoid speculative
+            # LLM requests for SD Dialer calls; changed transcripts discard them.
+            "enabled": not is_sd_dialer_call,
+            "preemptive_tts": fast_tts and not is_sd_dialer_call,
             "max_speech_duration": 7.0,
-            "max_retries": 2,
+            "max_retries": 0 if is_sd_dialer_call else 2,
         },
     )
 
@@ -753,12 +766,20 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
+    llm_conn_options = APIConnectOptions(
+        max_retry=3,
+        # The provider's 429 response on this project asked for a retry after
+        # 945 ms. Wait slightly longer before retrying SD Dialer turns.
+        retry_interval=1.2 if is_sd_dialer_call else 2.0,
+        timeout=10.0,
+    )
     session = AgentSession(
         vad=local_vad,
         stt=stt_engine,
         llm=create_llm(),
         tts=tts_engine,
         turn_handling=turn_handling,
+        conn_options=SessionConnectOptions(llm_conn_options=llm_conn_options),
         # A tiny breath between adjacent agent utterances sounds much more
         # natural than stitching them together with no gap.
         min_consecutive_speech_delay=0.18,
