@@ -23,6 +23,35 @@ from piper import PiperVoice, SynthesisConfig
 from piper.config import PiperConfig
 
 
+_UNITS_PTPT = ("zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove")
+_TEENS_PTPT = ("dez", "onze", "doze", "treze", "catorze", "quinze", "dezasseis", "dezassete", "dezoito", "dezanove")
+_TENS_PTPT = {20: "vinte", 30: "trinta", 40: "quarenta", 50: "cinquenta"}
+
+
+def _number_ptpt(value: int) -> str:
+    """Spell the small numbers used in Portuguese spoken clock times."""
+    if not 0 <= value <= 59:
+        return str(value)
+    if value < 10:
+        return _UNITS_PTPT[value]
+    if value < 20:
+        return _TEENS_PTPT[value - 10]
+    tens = (value // 10) * 10
+    units = value % 10
+    return _TENS_PTPT[tens] if units == 0 else f"{_TENS_PTPT[tens]} e {_UNITS_PTPT[units]}"
+
+
+def _format_clock_time(match: re.Match[str]) -> str:
+    hour = int(match.group(1))
+    minute = int(match.group(2) or "0")
+    if hour == 0 and minute == 0:
+        return "meia-noite"
+    hour_text = "meia-noite" if hour == 0 else _number_ptpt(hour)
+    if minute == 0:
+        return "uma hora" if hour == 1 else f"{hour_text} horas"
+    return f"{hour_text} horas e {_number_ptpt(minute)} minutos"
+
+
 def _prepare_ptpt_text(text: str) -> str:
     """Light cleanup for clearer European-Portuguese neural speech."""
     text = re.sub(r"[\*_#`~]+", " ", text)
@@ -37,6 +66,15 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"\bworkflows?\b", "fluxos de trabalho", text, flags=re.IGNORECASE)
     text = re.sub(r"\bchatbots?\b", "assistentes virtuais", text, flags=re.IGNORECASE)
     text = re.sub(r"\bcall[ -]?center\b", "centro de atendimento", text, flags=re.IGNORECASE)
+    # Normalize symbols and clock abbreviations before Piper reads them aloud.
+    text = re.sub(r"€\s*(\d+(?:[.,]\d{1,2})?)", r"\1 euros", text)
+    text = re.sub(r"(\d+(?:[.,]\d{1,2})?)\s*€", r"\1 euros", text)
+    text = re.sub(
+        r"(?<!\w)([01]?\d|2[0-3])\s*(?:h|:)\s*([0-5]\d)?(?:h)?(?!\w)",
+        _format_clock_time,
+        text,
+        flags=re.IGNORECASE,
+    )
     # Spell brand names as they should sound in European Portuguese; match mixed case too.
     text = re.sub(r"\bCompara\s*\+", "Compara Mais", text, flags=re.IGNORECASE)
     text = re.sub(r"\bLumin\s+AI\b", "Lúmin I A", text, flags=re.IGNORECASE)
@@ -213,7 +251,7 @@ class PiperChunkedStream(tts.ChunkedStream):
                     # A brief break between sentence boundaries keeps the voice
                     # clear without adding the old 110 ms pause.
                     if index < len(sentences) - 1 and not stop.is_set():
-                        silence_samples = int(self._piper.sample_rate * 0.06)
+                        silence_samples = int(self._piper.sample_rate * 0.08)
                         loop.call_soon_threadsafe(
                             audio_queue.put_nowait,
                             b"\x00\x00" * silence_samples,

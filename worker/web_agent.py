@@ -125,7 +125,7 @@ def get_piper() -> PiperTTS:
 
 VOICE_PROFILES = {
     "natural": dict(length_scale=1.08, noise_scale=0.38, noise_w_scale=0.43, volume=1.00),
-    "clear": dict(length_scale=1.11, noise_scale=0.30, noise_w_scale=0.36, volume=1.01),
+    "clear": dict(length_scale=1.17, noise_scale=0.28, noise_w_scale=0.33, volume=1.01),
     "commercial": dict(length_scale=1.03, noise_scale=0.36, noise_w_scale=0.38, volume=1.02),
 }
 
