@@ -1552,6 +1552,8 @@ async def sd_dialer_call(
 ):
     user_id, profile, token = await _require_sd_context(authorization)
     is_manual = bool(payload.phone)
+    if XAI_TWILIO.enabled and payload.agent_id == "lumin-telecom":
+        XAI_TWILIO.require_configured()
     has_lead = bool(payload.lead_id)
     if is_manual == has_lead:
         raise HTTPException(status_code=400, detail="Escolhe uma lead ou introduz um número manual")
