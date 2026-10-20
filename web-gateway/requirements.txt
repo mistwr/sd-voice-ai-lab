@@ -3,3 +3,4 @@ uvicorn[standard]~=0.34
 livekit-api~=1.0
 livekit-agents~=1.8
 twilio>=9,<11
+websockets>=14,<16
