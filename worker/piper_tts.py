@@ -35,7 +35,9 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"\bworkflows?\b", "fluxos de trabalho", text, flags=re.IGNORECASE)
     text = re.sub(r"\bchatbots?\b", "assistentes virtuais", text, flags=re.IGNORECASE)
     text = re.sub(r"\bcall[ -]?center\b", "centro de atendimento", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bLUMIN AI\b", "Lúmin I A", text)
+    # Spell brand names as they should sound in European Portuguese; match mixed case too.
+    text = re.sub(r"\bCompara\s*\+", "Compara Mais", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bLumin\s+AI\b", "Lúmin I A", text, flags=re.IGNORECASE)
     text = re.sub(r"\bIA\b", "I A", text)
     text = re.sub(r"\bAI\b", "A I", text)
     text = re.sub(r"\bGPT\b", "G P T", text)
@@ -46,7 +48,7 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"\bMEO\b", "méu", text)
     text = re.sub(r"\bNOS\b", "nós", text)
     text = re.sub(r"\bDIGI\b", "dígi", text)
-    text = re.sub(r"\bLUMIN\b", "Lúmin", text)
+    text = re.sub(r"\bLumin\b", "Lúmin", text, flags=re.IGNORECASE)
     text = re.sub(r"\bSD Dialer\b", "ésse dê dáialer", text)
     # A little extra punctuation helps Piper separate ideas instead of swallowing
     # words in long sales sentences.
