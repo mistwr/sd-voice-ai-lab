@@ -41,15 +41,36 @@ def _number_ptpt(value: int) -> str:
     return _TENS_PTPT[tens] if units == 0 else f"{_TENS_PTPT[tens]} e {_UNITS_PTPT[units]}"
 
 
+def _hour_word_ptpt(value: int) -> str:
+    if value == 1:
+        return "uma"
+    if value == 2:
+        return "duas"
+    return _number_ptpt(value)
+
+
 def _format_clock_time(match: re.Match[str]) -> str:
-    hour = int(match.group(1))
-    minute = int(match.group(2) or "0")
-    if hour == 0 and minute == 0:
-        return "meia-noite"
-    hour_text = "meia-noite" if hour == 0 else _number_ptpt(hour)
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or "0")
+    explicit_period = re.sub(r"^de\s+", "da ", (match.group("period") or "").lower())
+
+    if hour == 0:
+        hour_words, period = "meia-noite", ""
+    elif hour == 12:
+        hour_words, period = "meio-dia", ""
+    elif hour < 12:
+        hour_words, period = _hour_word_ptpt(hour), "da manhã"
+    else:
+        hour_words = _hour_word_ptpt(hour - 12)
+        period = "da tarde" if hour < 20 else "da noite"
+
+    if explicit_period:
+        period = explicit_period
+    if hour in {0, 12}:
+        return hour_words if minute == 0 else f"{hour_words} e {_number_ptpt(minute)}"
     if minute == 0:
-        return "uma hora" if hour == 1 else f"{hour_text} horas"
-    return f"{hour_text} horas e {_number_ptpt(minute)} minutos"
+        return f"{hour_words} {period}"
+    return f"{hour_words} e {_number_ptpt(minute)} {period}"
 
 
 def _prepare_ptpt_text(text: str) -> str:
@@ -66,15 +87,17 @@ def _prepare_ptpt_text(text: str) -> str:
     text = re.sub(r"\bworkflows?\b", "fluxos de trabalho", text, flags=re.IGNORECASE)
     text = re.sub(r"\bchatbots?\b", "assistentes virtuais", text, flags=re.IGNORECASE)
     text = re.sub(r"\bcall[ -]?center\b", "centro de atendimento", text, flags=re.IGNORECASE)
-    # Normalize symbols and clock abbreviations before Piper reads them aloud.
+    # Normalize currency and clock abbreviations into words before Piper reads them aloud.
     text = re.sub(r"€\s*(\d+(?:[.,]\d{1,2})?)", r"\1 euros", text)
     text = re.sub(r"(\d+(?:[.,]\d{1,2})?)\s*€", r"\1 euros", text)
     text = re.sub(
-        r"(?<!\w)([01]?\d|2[0-3])\s*(?:h|:)\s*([0-5]\d)?(?:h)?(?!\w)",
+        r"(?<!\w)(?P<hour>[01]?\d|2[0-3])\s*(?:h|:)\s*(?P<minute>[0-5]\d)?(?:h)?(?:\s+(?P<period>(?:da|de)\s+(?:manhã|tarde|noite)))?(?!\w)",
         _format_clock_time,
         text,
         flags=re.IGNORECASE,
     )
+    text = re.sub(r"\bàs\s+meia-noite\b", "à meia-noite", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bàs\s+meio-dia\b", "ao meio-dia", text, flags=re.IGNORECASE)
     # Spell brand names as they should sound in European Portuguese; match mixed case too.
     text = re.sub(r"\bCompara\s*\+", "Compara Mais", text, flags=re.IGNORECASE)
     text = re.sub(r"\bLumin\s+AI\b", "Lúmin I A", text, flags=re.IGNORECASE)

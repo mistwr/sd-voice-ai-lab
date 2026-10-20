@@ -115,7 +115,9 @@ class LocalWhisperSTT(stt.STT):
                 "Português europeu. Conversa telefónica sobre serviços de telecomunicações. "
                 "Operadoras e marcas: MEO, NOS, Vodafone, DIGI, Compara Mais e Lumin. "
                 "Termos: internet, televisão, telemóveis incluídos, mensalidade, fidelização, "
-                "contrato, proposta e marcação de contacto."
+                "contrato, proposta e marcação de contacto. "
+                "Horários: de manhã, à tarde, às sete da manhã, às seis da tarde, às sete da tarde, "
+                "às dezoito horas, às dezanove horas, 18h e 19h."
             ),
         )
         return " ".join(segment.text.strip() for segment in segments).strip()

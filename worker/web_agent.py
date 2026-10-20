@@ -71,7 +71,7 @@ def get_local_vad() -> Any:
     if _LOCAL_VAD is None:
         _LOCAL_VAD = silero.VAD.load(
             min_speech_duration=0.05,
-            min_silence_duration=0.55,
+            min_silence_duration=0.65,
             prefix_padding_duration=0.35,
             sample_rate=16000,
             force_cpu=True,
@@ -278,12 +278,13 @@ def build_instructions(
 Tu és o Lumin, um assistente virtual de voz de inteligência artificial.
 
 REGRAS GERAIS
-- No início da chamada, diz o teu nome e identifica-te brevemente como assistente virtual. Se a pessoa perguntar se és um sistema de inteligência artificial, responde com clareza. Nunca finjas ser humano.
+- A apresentação inicial já é pronunciada automaticamente. Não repitas o nome, a empresa nem o guião de abertura. Depois dela, responde diretamente à fala do contacto. Se a pessoa perguntar se és inteligência artificial, responde com clareza. Nunca finjas ser humano.
 - Fala em português de Portugal, de forma natural, clara e profissional.
+- Diz as horas por extenso e de forma natural: “às seis da tarde”, “às sete da manhã”. Evita ler “18h” ou “19h” como números de relógio.
 - Em chamadas comerciais, usa tratamento respeitoso: “o senhor/a senhora” ou construções neutras. Nunca uses “tu”, “teu”, “tua”, “contigo” nem formas como “poderias”.
 - Faz apenas uma pergunta factual de cada vez, mesmo que o perfil peça várias informações. Se a pessoa responder a várias de uma vez, aproveita todas e pergunta só pelo dado em falta.
 - Se a resposta parecer mal reconhecida, aproveita o que estiver claro e pede uma clarificação curta com opções concretas do contexto. Em telecomunicações, por exemplo: “Não percebi o nome da operadora. Disse MEO, NOS, Vodafone ou DIGI?”
-- Se a pessoa repetir um preço, uma data ou uma hora, trata a repetição como confirmação e avança; não voltes a perguntar o mesmo.
+- Se a pessoa repetir ou corrigir uma resposta, aproveita a indicação mais recente e não repitas a pergunta que a levou a repetir.
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Guarda mentalmente os dados já respondidos. Não perguntes outra vez algo que já foi fornecido ou esteja explícito no contexto; aproveita respostas que cubram várias perguntas.
 - Faz apenas a pergunta seguinte necessária, uma de cada vez. Se a resposta for ambígua, esclarece uma única vez com palavras diferentes; se continuar incerta, regista-a como desconhecida e avança, salvo se for indispensável para continuar.
@@ -322,6 +323,15 @@ Podes explicar soluções de inteligência artificial, atendimento, automação,
 qualificação de contactos e ferramentas à medida.
 """.rstrip()
 
+    opening_context = _clean(profile.get("opening"), 800)
+    if _clean(profile.get("id"), 80).casefold() == "lumin-telecom":
+        opening_context = re.sub(
+            r"\s+e\s+quanto\s+paga\s+aproximadamente\s+por\s+mês\?",
+            "? Depois, pergunta o valor mensal se ainda não tiver sido indicado.",
+            opening_context,
+            flags=re.IGNORECASE,
+        )
+
     sections = [
         ("NOME DO AGENTE", _clean(profile.get("name"), 80)),
         ("EMPRESA / MARCA", _clean(profile.get("company"), 120)),
@@ -329,7 +339,7 @@ qualificação de contactos e ferramentas à medida.
         ("OBJETIVO DA CHAMADA", _clean(profile.get("objective"), 500)),
         ("PRODUTO / SERVIÇO", _clean(profile.get("product"), 1200)),
         ("OFERTA / CONDIÇÕES AUTORIZADAS", _clean(profile.get("offer"), 1200)),
-        ("ABERTURA PRETENDIDA", _clean(profile.get("opening"), 800)),
+        ("ABERTURA PRETENDIDA", opening_context),
         ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), 1800)),
         ("NOTAS DA EMPRESA", _clean(profile.get("notes"), 2200)),
         ("TOM", _tone_without_voice_tag(profile)),
@@ -373,6 +383,7 @@ Se a pessoa aceitar claramente o contacto de um consultor, pergunta apenas pelo 
 Quando a pessoa indicar uma data e hora específicas, chama schedule_follow_up uma única vez com scheduled_at em ISO 8601 e fuso Europe/Lisbon.
 Não perguntes se pode guardar dados ou voltar a ligar; a autorização já está registada.
 Só afirmes que a chamada ficou marcada se a ferramenta confirmar sucesso. Se faltar apenas a hora, pergunta só a hora.
+Se a pessoa disser apenas o período (“de manhã”, “à tarde” ou “à noite”), pergunta pela hora uma única vez, com opções curtas por extenso. Por exemplo: “Prefere às seis ou às sete da tarde?” Se a pessoa indicar uma hora clara, não voltes a pedi-la.
 Se a pessoa disser “amanhã de manhã”, pergunta apenas a hora. Se indicar uma hora antes das nove ou depois das vinte, confirma se é mesmo essa a intenção antes de marcar. Se disser “agora”, esclarece se pretende uma chamada imediata ou um contacto noutra hora; não marques “agora” como seguimento futuro.
 Quando a pessoa repetir ou corrigir o horário, usa a indicação mais recente e confirma apenas o que continuar ambíguo.
 """
@@ -407,6 +418,15 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     name_part = f", {customer_name}" if has_customer_name else ""
     name_placeholder = re.compile(r"\[(?:nome|name)\]", flags=re.IGNORECASE)
     company_key = re.sub(r"[^a-z0-9]", "", company.casefold())
+    profile_id = _clean(profile.get("id"), 80).casefold()
+    if profile_id == "lumin-telecom":
+        # Ask for the operator first; the monthly amount can follow as a separate turn.
+        opening = re.sub(
+            r"\s+e\s+quanto\s+paga\s+aproximadamente\s+por\s+mês\?",
+            "?",
+            opening,
+            flags=re.IGNORECASE,
+        )
 
     if "compara" in company_key and opening:
         has_name_placeholder = bool(name_placeholder.search(opening))
@@ -416,9 +436,19 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
         opening = re.sub(r"\s{2,}", " ", opening).strip()
         if has_customer_name and not has_name_placeholder:
             opening = _add_customer_name_to_opening(opening, customer_name)
-        # The campaign opening already introduces Lumin; do not prepend a
-        # second introduction or replace the campaign wording.
-        if "assistente virtual" in opening.casefold():
+        # Campaign openings may say “agente virtual” instead of “assistente virtual”.
+        # Avoid prepending another greeting when the script already introduces Lumin.
+        has_virtual_intro = bool(
+            re.search(r"\b(?:assistente|agente)\s+virtual\b", opening, flags=re.IGNORECASE)
+        )
+        has_named_intro = bool(
+            re.search(
+                rf"\b(?:sou|chamo-me)\s+(?:(?:o|a)\s+)?{re.escape(agent_name)}\b",
+                opening,
+                flags=re.IGNORECASE,
+            )
+        )
+        if has_virtual_intro or has_named_intro:
             return opening
 
     if opening:
