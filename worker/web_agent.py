@@ -3,7 +3,7 @@ LUMIN Voice Agent
 Stable production voice path for luminai.pt and outbound SIP calls.
 
 Pipeline:
-WebRTC/SIP -> local Silero VAD + faster-whisper STT -> GPT-5.6 Luna -> local Piper / selectable TTS -> WebRTC/SIP
+WebRTC/SIP -> local Silero VAD + faster-whisper STT -> Groq GPT-OSS -> Kokoro / local Piper -> WebRTC/SIP
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference, tts
-from livekit.plugins import silero
+from livekit.plugins import openai as openai_plugin, silero
 
 from local_whisper_stt import LocalWhisperSTT
 from piper_tts import PiperTTS
@@ -63,6 +63,27 @@ def get_local_vad() -> Any:
             force_cpu=True,
         )
     return _LOCAL_VAD
+
+
+def create_llm() -> Any:
+    """Use Groq's OpenAI-compatible chat API for agent turns."""
+    provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+    if provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("LLM_PROVIDER=groq requires GROQ_API_KEY")
+        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+        logger.info("LLM provider selected", extra={"provider": "groq", "model": model})
+        return openai_plugin.LLM(
+            model=model,
+            base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+            api_key=api_key,
+        )
+    if provider in {"livekit", "livekit-inference"}:
+        model = os.getenv("LIVEKIT_LLM_MODEL", "openai/gpt-5.6-luna")
+        logger.info("LLM provider selected", extra={"provider": "livekit-inference", "model": model})
+        return inference.LLM(model)
+    raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
 
 
 def get_piper() -> PiperTTS:
@@ -594,11 +615,16 @@ async def entrypoint(ctx: JobContext):
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
     if is_telecom_profile:
-        # This profile uses only local Piper: no remote Kokoro/xAI TTS fallback,
-        # which previously added long startup delays when the provider was down.
-        tts_engine = voice_for_profile(base_tts, "commercial")
-        selected_engine = "piper-telecom-local"
-        logger.info("Lumin Telecom routed directly to local Piper")
+        # Prefer self-hosted Kokoro for natural PT-PT speech. Piper is the
+        # local fallback if Kokoro is unavailable or misses its 4s deadline.
+        tts_engine, selected_engine = xai_like_open_source_tts(
+            base_tts,
+            kokoro_url,
+        )
+        logger.info(
+            "Lumin Telecom routed to self-hosted Kokoro with local Piper fallback",
+            extra={"provider": selected_engine},
+        )
     elif wants_neural_ptpt and use_livekit_xai:
         # Explicit metered override; keep calls speaking if LiveKit returns 429.
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
@@ -727,7 +753,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=local_vad,
         stt=stt_engine,
-        llm=inference.LLM("openai/gpt-5.6-luna"),
+        llm=create_llm(),
         tts=tts_engine,
         turn_handling=turn_handling,
         # A tiny breath between adjacent agent utterances sounds much more
