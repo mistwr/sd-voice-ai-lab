@@ -107,15 +107,15 @@ class LocalWhisperSTT(stt.STT):
             audio,
             language="pt",
             task="transcribe",
-            beam_size=1,
-            best_of=1,
+            beam_size=5,
             temperature=0,
             condition_on_previous_text=False,
             vad_filter=False,
             initial_prompt=(
-                "Português europeu. Conversa telefónica sobre telecomunicações, "
-                "energia, tarifas, faturas, contratos, internet, telemóvel e televisão. "
-                "Marcas: MEO, NOS, DIGI e Lumin."
+                "Português europeu. Conversa telefónica sobre serviços de telecomunicações. "
+                "Operadoras e marcas: MEO, NOS, Vodafone, DIGI, Compara Mais e Lumin. "
+                "Termos: internet, televisão, telemóveis incluídos, mensalidade, fidelização, "
+                "contrato, proposta e marcação de contacto."
             ),
         )
         return " ".join(segment.text.strip() for segment in segments).strip()

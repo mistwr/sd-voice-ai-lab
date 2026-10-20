@@ -71,7 +71,7 @@ def get_local_vad() -> Any:
     if _LOCAL_VAD is None:
         _LOCAL_VAD = silero.VAD.load(
             min_speech_duration=0.05,
-            min_silence_duration=0.45,
+            min_silence_duration=0.55,
             prefix_padding_duration=0.35,
             sample_rate=16000,
             force_cpu=True,
@@ -280,6 +280,10 @@ Tu és o Lumin, um assistente virtual de voz de inteligência artificial.
 REGRAS GERAIS
 - No início da chamada, diz o teu nome e identifica-te brevemente como assistente virtual. Se a pessoa perguntar se és um sistema de inteligência artificial, responde com clareza. Nunca finjas ser humano.
 - Fala em português de Portugal, de forma natural, clara e profissional.
+- Em chamadas comerciais, usa tratamento respeitoso: “o senhor/a senhora” ou construções neutras. Nunca uses “tu”, “teu”, “tua”, “contigo” nem formas como “poderias”.
+- Faz apenas uma pergunta factual de cada vez, mesmo que o perfil peça várias informações. Se a pessoa responder a várias de uma vez, aproveita todas e pergunta só pelo dado em falta.
+- Se a resposta parecer mal reconhecida, aproveita o que estiver claro e pede uma clarificação curta com opções concretas do contexto. Em telecomunicações, por exemplo: “Não percebi o nome da operadora. Disse MEO, NOS, Vodafone ou DIGI?”
+- Se a pessoa repetir um preço, uma data ou uma hora, trata a repetição como confirmação e avança; não voltes a perguntar o mesmo.
 - Responde ao que a pessoa acabou de dizer e mantém o contexto.
 - Guarda mentalmente os dados já respondidos. Não perguntes outra vez algo que já foi fornecido ou esteja explícito no contexto; aproveita respostas que cubram várias perguntas.
 - Faz apenas a pergunta seguinte necessária, uma de cada vez. Se a resposta for ambígua, esclarece uma única vez com palavras diferentes; se continuar incerta, regista-a como desconhecida e avança, salvo se for indispensável para continuar.
@@ -369,6 +373,8 @@ Se a pessoa aceitar claramente o contacto de um consultor, pergunta apenas pelo 
 Quando a pessoa indicar uma data e hora específicas, chama schedule_follow_up uma única vez com scheduled_at em ISO 8601 e fuso Europe/Lisbon.
 Não perguntes se pode guardar dados ou voltar a ligar; a autorização já está registada.
 Só afirmes que a chamada ficou marcada se a ferramenta confirmar sucesso. Se faltar apenas a hora, pergunta só a hora.
+Se a pessoa disser “amanhã de manhã”, pergunta apenas a hora. Se indicar uma hora antes das nove ou depois das vinte, confirma se é mesmo essa a intenção antes de marcar. Se disser “agora”, esclarece se pretende uma chamada imediata ou um contacto noutra hora; não marques “agora” como seguimento futuro.
+Quando a pessoa repetir ou corrigir o horário, usa a indicação mais recente e confirma apenas o que continuar ambíguo.
 """
     return result
 
@@ -527,11 +533,14 @@ class LuminAgent(Agent):
     async def on_enter(self):
         greeting = build_greeting(self._profile, self._customer_name)
         parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", greeting) if part.strip()]
-        opening = parts[0] if parts else greeting
-        await self.session.say(opening, allow_interruptions=True)
-        if len(parts) > 1:
-            await self.session.say(" ".join(parts[1:]), allow_interruptions=True)
-
+        if not parts:
+            parts = [greeting.strip()]
+        # Keep the greeting and full agent identification together so a short
+        # caller interruption cannot cut the introduction after the agent's name.
+        intro = " ".join(parts[:2])
+        await self.session.say(intro, allow_interruptions=False)
+        if len(parts) > 2:
+            await self.session.say(" ".join(parts[2:]), allow_interruptions=True)
 async def entrypoint(ctx: JobContext):
     metadata: dict[str, Any] = {}
     try:
