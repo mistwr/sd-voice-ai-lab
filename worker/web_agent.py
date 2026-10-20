@@ -164,12 +164,13 @@ def prewarm(proc: JobProcess) -> None:
 def xai_like_open_source_tts(
     base_tts: PiperTTS,
     kokoro_url: str,
+    piper_voice_profile: str = "commercial",
 ) -> tuple[Any, str]:
-    """Use the installed European Portuguese Kokoro voice with a local Piper fallback."""
-    local_piper = voice_for_profile(base_tts, "clear")
+    """Use self-hosted European Portuguese Kokoro with a selected local Piper fallback."""
+    local_piper = voice_for_profile(base_tts, piper_voice_profile)
     if not kokoro_url:
-        logger.warning("Kokoro URL missing; using local Piper commercial PT-PT")
-        return local_piper, "piper-commercial"
+        logger.warning("Kokoro URL missing; using local Piper PT-PT")
+        return local_piper, f"piper-{piper_voice_profile}"
 
     kokoro = KokoroRemoteTTS(kokoro_url)
     fallback = tts.FallbackAdapter(
@@ -615,11 +616,12 @@ async def entrypoint(ctx: JobContext):
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
     if is_telecom_profile:
-        # Prefer self-hosted Kokoro for natural PT-PT speech. Piper is the
-        # local fallback if Kokoro is unavailable or misses its 4s deadline.
+        # Prefer self-hosted Kokoro for natural PT-PT speech. The clear Piper
+        # profile is the local fallback if Kokoro is unavailable.
         tts_engine, selected_engine = xai_like_open_source_tts(
             base_tts,
             kokoro_url,
+            piper_voice_profile="clear",
         )
         logger.info(
             "Lumin Telecom routed to self-hosted Kokoro with local Piper fallback",
@@ -645,10 +647,11 @@ async def entrypoint(ctx: JobContext):
         )
         selected_engine = "xai-neural-ptpt-with-kokoro-piper-fallback"
     elif wants_neural_ptpt:
-        # The Telecom profile asks for an xAI-like voice, but stays on open-source.
+        # Keep the selected Piper fallback profile for other open-source neural voices.
         tts_engine, selected_engine = xai_like_open_source_tts(
             base_tts,
             kokoro_url,
+            piper_voice_profile=voice_id,
         )
         logger.info(
             "xAI voice profile routed to open-source PT-PT TTS",
