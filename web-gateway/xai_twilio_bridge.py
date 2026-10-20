@@ -586,9 +586,18 @@ class XaiTwilioBridge:
                     await websocket.close(code=1000)
                 except Exception:
                     pass
-            for task in list(db_tasks):
-                task.cancel()
-            await asyncio.gather(*db_tasks, return_exceptions=True)
+            remaining_db_tasks = list(db_tasks)
+            if remaining_db_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*remaining_db_tasks, return_exceptions=True),
+                        timeout=8.5,
+                    )
+                except asyncio.TimeoutError:
+                    for task in remaining_db_tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*remaining_db_tasks, return_exceptions=True)
             connected_at = float(state.get("connectedAt") or 0)
             state["endedAt"] = time.time()
             state["durationSeconds"] = max(0, int(state["endedAt"] - connected_at)) if connected_at else 0
@@ -691,12 +700,15 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
         if consent == "pending":
             decision = _consent_answer(text_value)
             if decision == "granted":
-                state["transcriptConsentStatus"] = "granted"
+                state["transcriptConsentStatus"] = "granting"
                 state["transcriptConsentAt"] = datetime.now(timezone.utc).isoformat()
                 schedule(self._grant_and_record_transcript(state, "client", text_value))
             elif decision == "denied":
                 state["transcriptConsentStatus"] = "denied"
                 schedule(self._update_call_row(state, transcript_consent_status="denied"))
+            return
+        if consent == "granting":
+            state.setdefault("pendingUserTranscripts", []).append(text_value)
             return
         if consent == "granted":
             schedule(self._insert_transcript(state, "client", text_value))
@@ -704,6 +716,8 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
     async def _process_agent_transcript(self, state: dict[str, Any], text_value: str, schedule: Any) -> None:
         if state.get("transcriptConsentStatus") == "granted":
             schedule(self._insert_transcript(state, "agent", _clean(text_value, 4000)))
+        elif state.get("transcriptConsentStatus") == "granting":
+            state.setdefault("pendingAgentTranscripts", []).append(_clean(text_value, 4000))
 
     async def _grant_and_record_transcript(self, state: dict[str, Any], speaker: str, text_value: str) -> None:
         updated = await self._update_call_row(
@@ -712,7 +726,18 @@ Fala com frases naturais e curtas, uma pergunta de cada vez. Aproveita tudo o qu
             transcript_consent_at=state.get("transcriptConsentAt"),
         )
         if updated:
+            state["transcriptConsentStatus"] = "granted"
             await self._insert_transcript(state, speaker, text_value)
+            pending_user = state.pop("pendingUserTranscripts", [])
+            pending_agent = state.pop("pendingAgentTranscripts", [])
+            for pending_text in pending_user:
+                await self._insert_transcript(state, "client", pending_text)
+            for pending_text in pending_agent:
+                await self._insert_transcript(state, "agent", pending_text)
+        else:
+            state["transcriptConsentStatus"] = "unavailable"
+            state.pop("pendingUserTranscripts", None)
+            state.pop("pendingAgentTranscripts", None)
 
     async def _run_tool(self, state: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
         name = _clean(call.get("name"), 80)
