@@ -1,0 +1,90 @@
+# Deploy both services together. The worker is required for the agent to speak.
+# Review the current Render price before applying this Blueprint.
+services:
+  - type: web
+    name: lumin-voice-gateway
+    runtime: docker
+    region: frankfurt
+    plan: 0.5c-512mb
+    rootDir: web-gateway
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    envVars:
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: LUMIN_AGENT_NAME
+        value: lumin-web
+      - key: LUMIN_GATEWAY_PUBLIC_URL
+        fromService:
+          type: web
+          name: lumin-voice-gateway
+          envVarKey: RENDER_EXTERNAL_URL
+      # Optional model/avatar services are not migrated in this first deployment.
+      # Empty values prevent calls to the old private Railway hostnames.
+      - key: LUMIN_AVATAR_URL
+        value: ""
+      - key: LUMIN_OPENVOICE_URL
+        value: ""
+      - key: LUMIN_KOKORO_URL
+        value: ""
+      - key: LUMIN_CHATTERBOX_URL
+        value: ""
+      - key: LUMIN_PIPER_CATALOG_URL
+        value: ""
+
+  - type: worker
+    name: lumin-voice-agent
+    runtime: docker
+    region: frankfurt
+    plan: 2c-4g
+    rootDir: worker
+    dockerfilePath: ./Dockerfile.web
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: LIVEKIT_URL
+        fromService:
+          type: web
+          name: lumin-voice-gateway
+          envVarKey: LIVEKIT_URL
+      - key: LIVEKIT_API_KEY
+        fromService:
+          type: web
+          name: lumin-voice-gateway
+          envVarKey: LIVEKIT_API_KEY
+      - key: LIVEKIT_API_SECRET
+        fromService:
+          type: web
+          name: lumin-voice-gateway
+          envVarKey: LIVEKIT_API_SECRET
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: LUMIN_TTS_PROVIDER
+        value: opensource
+      - key: LOCAL_WHISPER_MODEL
+        value: large-v3-turbo
+      - key: LOCAL_WHISPER_CPU_THREADS
+        value: "2"
+      - key: LOCAL_WHISPER_WORKERS
+        value: "1"
+      - key: KOKORO_TTS_URL
+        value: ""
+      - key: OPENVOICE_TTS_URL
+        value: ""
+      - key: CHATTERBOX_TTS_URL
+        value: ""
+      - key: PIPER_CATALOG_TTS_URL
+        value: ""
