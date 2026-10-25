@@ -721,9 +721,8 @@ async def entrypoint(ctx: JobContext):
     livekit_tts_provider = os.getenv("LUMIN_TTS_PROVIDER", "opensource").strip().lower()
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
-    if is_telecom_profile:
-        # Keep this call path on local Piper: the remote Kokoro endpoint was
-        # timing out on every turn and adding four seconds before fallback.
+    if is_telecom_profile and not wants_neural_ptpt:
+        # Keep local Piper only when this profile does not explicitly select xAI.
         tts_engine = voice_for_profile(base_tts, "clear")
         selected_engine = "piper-clear"
         logger.info(
