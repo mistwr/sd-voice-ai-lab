@@ -92,10 +92,8 @@ def create_llm() -> Any:
             model=model,
             base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
             api_key=api_key,
-            extra_kwargs={
-                "max_completion_tokens": 192,
-                "reasoning_effort": "low",
-            },
+            max_completion_tokens=192,
+            reasoning_effort="low",
         )
     if provider in {"livekit", "livekit-inference"}:
         model = os.getenv("LIVEKIT_LLM_MODEL", "openai/gpt-5.6-luna")
