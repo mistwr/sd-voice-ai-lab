@@ -32,7 +32,7 @@ SD_DIALER_LEAD_API_KEY=<chave interna de lead sync>
 
 O ficheiro `.livekit-secrets` está no `.gitignore`; não o envies nem o guardes no repositório. Não precisas de copiar `LIVEKIT_URL`, `LIVEKIT_API_KEY` ou `LIVEKIT_API_SECRET` para o container LiveKit Cloud: a infraestrutura injeta essas variáveis no agente. Também não é necessária uma chave xAI separada; `xai/tts-1` é chamado via LiveKit Inference.
 
-O worker continua a usar Groq para o LLM, tal como antes. `LUMIN_TTS_PROVIDER=xai` ativa xAI TTS para os perfis enviados com `voiceEngine: "xai"`. Os estilos Natural, Clara e Comercial mapeiam para as vozes xAI Sal, Rex e Leo. Se o xAI atingir um limite, o código mantém os fallbacks de voz já existentes.
+O worker continua a usar Groq para o LLM, tal como antes. `LUMIN_TTS_PROVIDER=xai` ativa xAI TTS para os perfis enviados com `voiceEngine: "xai"`. Os estilos Natural, Clara e Comercial mapeiam para as vozes xAI Sal, Rex e Leo. Para esses perfis, a síntese é estrita: se o xAI estiver indisponível ou sem quota, a chamada apresenta um erro de voz em vez de mudar silenciosamente para Piper.
 
 ## Criar e verificar o agente
 
@@ -48,7 +48,7 @@ Para publicar uma versão mais tarde:
 lk agent deploy --secrets-file .livekit-secrets
 ```
 
-Confirma no LiveKit Cloud que o agente está ativo e que o nome de dispatch é `lumin-web`. Nos logs procura `voice profile selected` com `voice_engine=xai-neural-ptpt-with-kokoro-piper-fallback`; se aparecer `piper-clear` ou `piper`, ainda está a ser usado um perfil Piper ou não foi aplicado `LUMIN_TTS_PROVIDER=xai`.
+Confirma no LiveKit Cloud que o agente está ativo e que o nome de dispatch é `lumin-web`. Nos logs procura `voice profile selected` com `voice_engine=xai-neural-ptpt`. Se aparecer `piper-clear` ou `piper`, a chamada recebeu um perfil Piper; se surgir o erro de configuração, verifica `LUMIN_TTS_PROVIDER=xai`.
 
 ## Twilio e Netlify
 
