@@ -730,34 +730,18 @@ async def entrypoint(ctx: JobContext):
             extra={"provider": selected_engine},
         )
     elif wants_neural_ptpt and use_livekit_xai:
-        # Explicit metered override; keep calls speaking if LiveKit returns 429.
+        # An explicit xAI profile must use xAI. Do not silently switch to Piper
+        # when LiveKit Inference is rate-limited or unavailable.
         voices = {"natural": "sal", "clear": "rex", "commercial": "leo"}
-        xai_tts = inference.TTS(
+        tts_engine = inference.TTS(
             model="xai/tts-1",
             voice=voices.get(voice_id, "rex"),
             language="pt-PT",
         )
-        local_fallback = voice_for_profile(base_tts, "commercial")
-        fallback_tts = [xai_tts]
-        if kokoro_url:
-            fallback_tts.append(KokoroRemoteTTS(kokoro_url))
-        fallback_tts.append(local_fallback)
-        tts_engine = tts.FallbackAdapter(
-            tts=fallback_tts,
-            max_retry_per_tts=0,
-            sample_rate=max(engine.sample_rate for engine in fallback_tts),
-        )
-        selected_engine = "xai-neural-ptpt-with-kokoro-piper-fallback"
+        selected_engine = "xai-neural-ptpt"
     elif wants_neural_ptpt:
-        # Keep the selected Piper fallback profile for other open-source neural voices.
-        tts_engine, selected_engine = xai_like_open_source_tts(
-            base_tts,
-            kokoro_url,
-            piper_voice_profile=voice_id,
-        )
-        logger.info(
-            "xAI voice profile routed to open-source PT-PT TTS",
-            extra={"voice_profile": voice_id, "provider": selected_engine},
+        raise RuntimeError(
+            "Este perfil pede voz xAI, mas LUMIN_TTS_PROVIDER não está configurado para xai."
         )
     elif wants_kokoro or wants_open_source:
         tts_engine, selected_engine = open_source_ptpt_tts(
