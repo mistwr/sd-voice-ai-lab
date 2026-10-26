@@ -722,15 +722,12 @@ async def entrypoint(ctx: JobContext):
     use_livekit_xai = livekit_tts_provider in {"xai", "livekit-xai"}
 
     if is_telecom_profile:
-        # Restore the existing Kokoro PT-PT voice. Keep local Piper as failover
-        # instead of replacing the selected voice on every Telecom call.
-        tts_engine, selected_engine = xai_like_open_source_tts(
-            base_tts,
-            kokoro_url,
-            piper_voice_profile="clear",
-        )
+        # Keep this call path on local Piper: the remote Kokoro endpoint was
+        # timing out on every turn and adding four seconds before fallback.
+        tts_engine = voice_for_profile(base_tts, "clear")
+        selected_engine = "piper-clear"
         logger.info(
-            "Lumin Telecom routed to self-hosted Kokoro with local Piper fallback",
+            "Lumin Telecom routed directly to local Piper PT-PT",
             extra={"provider": selected_engine},
         )
     elif wants_neural_ptpt and use_livekit_xai:
