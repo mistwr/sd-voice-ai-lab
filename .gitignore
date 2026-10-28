@@ -20,3 +20,4 @@ worker/.pytest_cache/
 # Sistema
 .DS_Store
 *.log
+worker/.livekit-secrets
