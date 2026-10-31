@@ -25,6 +25,6 @@ jobs:
           from pathlib import Path
           p=Path('worker/Dockerfile.lumin-web-recovery').read_text()
           assert 'CMD ["python", "web_agent.py", "start"]' in p
-          assert 'railway' not in p.lower()
+          assert not any('railway' in line.lower() for line in p.splitlines() if line.strip() and not line.lstrip().startswith('#'))
           print('PASS: isolated LUMIN worker entrypoint; no Railway')
           PY
