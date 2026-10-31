@@ -72,8 +72,14 @@ def voice_for_profile(base_tts: PiperTTS, voice_id: str) -> PiperTTS:
     return base_tts.with_profile(**settings)
 
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["lumin_tts"] = get_piper()
-    logger.info("Piper PT-PT prewarm complete")
+    # Piper is optional: an xAI-only deployment must not fail at startup
+    # when its local ONNX model is not installed.
+    try:
+        proc.userdata["lumin_tts"] = get_piper()
+        logger.info("Piper PT-PT prewarm complete")
+    except Exception:
+        proc.userdata["lumin_tts"] = None
+        logger.warning("Piper prewarm unavailable; neural voice can still start", exc_info=True)
 
 
 def _clean(value: Any, limit: int = 1800) -> str:
@@ -449,7 +455,7 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
-    base_tts = ctx.proc.userdata.get("lumin_tts") or get_piper()
+    base_tts = ctx.proc.userdata.get("lumin_tts")
     voice_id = _voice_id_from_profile(profile) if isinstance(profile, dict) else "natural"
     voice_engine = _clean(profile.get("voiceEngine"), 40).lower() if isinstance(profile, dict) else ""
     voice_source = _clean(profile.get("voiceSource"), 40).lower() if isinstance(profile, dict) else ""
@@ -515,6 +521,9 @@ async def entrypoint(ctx: JobContext):
             logger.warning("Kokoro requested but KOKORO_TTS_URL is missing; falling back to Piper")
         if wants_chatterbox and not chatterbox_url:
             logger.warning("Chatterbox requested but CHATTERBOX_TTS_URL is missing; falling back to Piper")
+        # Only require Piper when the selected voice actually uses it.
+        if base_tts is None:
+            base_tts = get_piper()
         tts_engine = voice_for_profile(base_tts, voice_id)
         selected_engine = "piper"
 
