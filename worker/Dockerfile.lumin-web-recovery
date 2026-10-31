@@ -1,0 +1,12 @@
+# Isolated LUMIN web voice worker (no Railway, no outbound calls).
+# Build context: worker/
+FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+COPY . ./
+# No automatic model download or remote requests at build time.
+# Run only after required test credentials, dependencies and models are verified.
+CMD ["python", "web_agent.py", "start"]
