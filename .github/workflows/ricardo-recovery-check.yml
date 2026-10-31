@@ -1,0 +1,33 @@
+name: Ricardo recovery isolated checks
+on:
+  push:
+    branches:
+      - recovery/ricardo-isolated-livekit
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile recovery modules
+        run: python -m py_compile worker/web_agent.py worker/ricardo_recovery.py
+      - name: Verify isolated agent and historical xAI voice
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          entry = Path('worker/ricardo_recovery.py').read_text()
+          worker = Path('worker/web_agent.py').read_text()
+          docker = Path('worker/Dockerfile.ricardo-recovery').read_text()
+          assert 'agent_name="lumin-ricardo-recovery"' in entry
+          assert 'agentProfile.voiceEngine=xai' in entry
+          assert 'model="xai/tts-1"' in worker
+          assert '"natural": "sal"' in worker
+          assert 'ricardo_recovery.py' in docker
+          print('Recovery isolation and voice contracts OK')
+          PY
