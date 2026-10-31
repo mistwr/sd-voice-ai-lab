@@ -1,0 +1,30 @@
+name: LUMIN historical voice recovery - offline tests
+on:
+  push:
+    branches:
+      - recovery/voice-2026-10-19-0900
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Python sources without installing dependencies
+        run: python -m compileall -q worker web-gateway
+      - name: Verify recovered LUMIN voice contract
+        run: python worker/recovery_preflight.py
+      - name: Confirm worker entrypoint and no Railway dependency
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('worker/Dockerfile.lumin-web-recovery').read_text()
+          assert 'CMD ["python", "web_agent.py", "start"]' in p
+          assert 'railway' not in p.lower()
+          print('PASS: isolated LUMIN worker entrypoint; no Railway')
+          PY
