@@ -19,7 +19,11 @@ from typing import Any
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference
 
-from piper_tts import PiperTTS
+try:
+    from piper_tts import PiperTTS
+except ImportError:
+    # xAI-only deployments do not require local Piper/ONNX packages.
+    PiperTTS = None  # type: ignore[assignment,misc]
 from chatterbox_tts import ChatterboxRemoteTTS
 from kokoro_remote_tts import KokoroRemoteTTS
 from openvoice_tts import OpenVoiceRemoteTTS
@@ -39,6 +43,8 @@ _PIPER: PiperTTS | None = None
 
 def get_piper() -> PiperTTS:
     global _PIPER
+    if PiperTTS is None:
+        raise RuntimeError('Piper is not installed; choose xAI or install Piper dependencies')
     if _PIPER is None:
         model_path = os.getenv("PIPER_MODEL", "/app/voices/lumin-ptpt.onnx")
         logger.info("loading local Piper PT-PT voice", extra={"model": model_path})
