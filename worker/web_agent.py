@@ -523,6 +523,35 @@ def build_greeting(profile: dict[str, Any] | None, customer_name: str = "") -> s
     )
 
 
+async def _wait_for_sip_answer(timeout: float = 85.0) -> bool:
+    """Em chamadas SIP de saída o agente entra na sala antes de o cliente atender.
+    Espera até o participante SIP ficar 'active' (atendeu) para não falar para o vazio.
+    Devolve False se o cliente desligar ou não atender dentro do tempo."""
+    try:
+        from livekit import rtc
+        from livekit.agents import get_job_context
+
+        room = get_job_context().room
+        sip_kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    except Exception:
+        return True  # versão antiga do SDK: mantém o comportamento anterior
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        for participant in list(room.remote_participants.values()):
+            if getattr(participant, "kind", None) != sip_kind:
+                continue
+            status = (participant.attributes or {}).get("sip.callStatus", "")
+            if status == "active":
+                await asyncio.sleep(0.35)  # deixa o áudio da chamada estabilizar
+                return True
+            if status == "hangup":
+                return False
+        await asyncio.sleep(0.2)
+    logger.warning("SIP call was not answered before greeting timeout")
+    return False
+
+
 class LuminAgent(Agent):
     def __init__(
         self,
@@ -534,7 +563,9 @@ class LuminAgent(Agent):
         follow_up_lead_id: str = "",
         follow_up_company_id: str = "",
         follow_up_requested_by: str = "",
+        wait_for_sip: bool = False,
     ) -> None:
+        self._wait_for_sip = wait_for_sip
         self._profile = profile or {}
         self._customer_name = customer_name
         self._follow_up_logger = follow_up_logger
@@ -614,6 +645,8 @@ class LuminAgent(Agent):
             return self._follow_up_confirmation
 
     async def on_enter(self):
+        if self._wait_for_sip and not await _wait_for_sip_answer():
+            return
         greeting = build_greeting(self._profile, self._customer_name)
         parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", greeting) if part.strip()]
         if not parts:
@@ -993,6 +1026,7 @@ async def entrypoint(ctx: JobContext):
             follow_up_lead_id=_clean(metadata.get("leadId") or metadata.get("lead_id"), 80),
             follow_up_company_id=company_id if is_sd_dialer_call else "",
             follow_up_requested_by=requested_by if is_sd_dialer_call else "",
+            wait_for_sip=is_sd_dialer_call or str(metadata.get("mode", "")).lower() == "outbound",
         ),
         room=ctx.room,
     )
