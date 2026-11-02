@@ -28,6 +28,7 @@ from livekit.agents import inference, utils
 from livekit.protocol.sip import CreateSIPParticipantRequest, ListSIPOutboundTrunkRequest
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 from twilio.request_validator import RequestValidator
+from xai_twilio_bridge import XaiTwilioBridge
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
@@ -88,6 +89,8 @@ app.add_middleware(
 )
 
 _CALLS: dict[str, dict[str, Any]] = {}
+XAI_TWILIO = XaiTwilioBridge(_CALLS)
+app.include_router(XAI_TWILIO.router)
 _CALL_MONITORS: set[asyncio.Task[Any]] = set()
 _LAST_CALL_AT = 0.0
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -998,6 +1001,10 @@ def _queue_call(
 ):
     global _LAST_CALL_AT
 
+    use_xai_twilio = XAI_TWILIO.should_handle(source, agent_profile)
+    if use_xai_twilio:
+        XAI_TWILIO.require_configured()
+
     now = time.monotonic()
     if now - _LAST_CALL_AT < 1.2:
         raise HTTPException(status_code=429, detail="Wait a moment before starting another call")
@@ -1016,7 +1023,14 @@ def _queue_call(
         "source": source,
         **(call_context or {}),
     }
-    asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile, caller_id))
+    if use_xai_twilio:
+        asyncio.create_task(
+            XAI_TWILIO.start_outbound_call(
+                _CALLS[call_id], phone, caller_id or LUMIN_CALLER_ID
+            )
+        )
+    else:
+        asyncio.create_task(_run_outbound_call(call_id, phone, name, agent_profile, caller_id))
     return _CALLS[call_id]
 
 
@@ -1026,6 +1040,8 @@ async def health():
         "ok": True,
         "service": "lumin-voice-gateway",
         "outboundConfigured": bool(LUMIN_CALL_API_KEY),
+        "xaiRealtimeEnabled": XAI_TWILIO.enabled,
+        "xaiRealtimeConfigured": XAI_TWILIO.configured,
         "platformConfigured": bool(
             LUMIN_PLATFORM_PASSWORD_HASH and LUMIN_PLATFORM_SESSION_SECRET
         ),
@@ -1536,6 +1552,8 @@ async def sd_dialer_call(
 ):
     user_id, profile, token = await _require_sd_context(authorization)
     is_manual = bool(payload.phone)
+    if XAI_TWILIO.enabled and payload.agent_id == "lumin-telecom":
+        XAI_TWILIO.require_configured()
     has_lead = bool(payload.lead_id)
     if is_manual == has_lead:
         raise HTTPException(status_code=400, detail="Escolhe uma lead ou introduz um número manual")
