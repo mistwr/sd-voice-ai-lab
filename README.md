@@ -96,9 +96,7 @@ docker build -t sd-voice-worker .
 docker run --env-file .env.local sd-voice-worker
 ```
 
-Deploy recomendado: **Railway** (o mesmo padrão que já usas no Lumin
-AI) — cria um serviço a partir deste `Dockerfile`, define as variáveis
-de ambiente no painel do Railway, e o worker fica sempre ligado.
+Para alojar o worker sem Railway, usa **LiveKit Cloud Agent Deployment** com o agente `web_agent.py` (`lumin-web`). O guia em [worker/DEPLOY_LIVEKIT_CLOUD.md](worker/DEPLOY_LIVEKIT_CLOUD.md) explica a preparação do Dockerfile, as variáveis xAI/Supabase e a publicação. O agente fica alojado na LiveKit Cloud; o Netlify continua a servir apenas o site e as funções HTTP.
 
 ## 5. Frontend (Next.js)
 
