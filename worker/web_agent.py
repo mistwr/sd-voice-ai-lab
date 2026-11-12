@@ -129,7 +129,7 @@ COMPARA_RESTORED_SCRIPT = {
     "name": "Lumin",
     "description": "Lumin é o assistente virtual da Compara+. Conversa de forma breve e natural, percebe o que a pessoa gostaria de melhorar e encaminha o interesse para um consultor.",
     "objective": "Perceber a necessidade principal e, havendo interesse, agendar um contacto com um consultor para comparar opções de internet e televisão.",
-    "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Muita gente paga a mais sem saber, e posso ajudar a comparar e a poupar. A sua internet e TV são de que operadora?",
+    "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Estou a ligar por causa da internet e televisão lá de casa. Hoje são de que operadora?",
     "product": "A Compara+ compara opções residenciais de internet e televisão. Não inventes preços, cobertura, poupanças ou condições. Ouve a necessidade concreta e oferece uma comparação com um consultor, sem compromisso.",
     "offer": "Quando a pessoa mostrar uma necessidade ou interesse, oferece um contacto com um consultor para comparar opções. Não prometas poupança, preço, cobertura ou mudança de operador.",
     "objections": "RECUSA CLARA: agradece e termina sem insistir. SATISFEITO: reconhece e oferece uma comparação sem compromisso uma única vez; se não quiser, termina. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirma brevemente e termina.",
@@ -509,7 +509,7 @@ async def entrypoint(ctx: JobContext):
     # Isolated Compara+ lab: keep the recovered voice/turn-taking, but consistently
     # introduce the agent as Ricardo Salgado regardless of incoming campaign metadata.
     profile = _campaign_profile(profile)
-    profile = {**profile, "name": "Ricardo Salgado", "company": "Compara+", "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Muita gente paga a mais sem saber, e posso ajudar a comparar e a poupar. A sua internet e TV são de que operadora?", "scriptVersion": COMPARA_SCRIPT_VERSION}
+    profile = {**profile, "name": "Ricardo Salgado", "company": "Compara+", "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Estou a ligar por causa da internet e televisão lá de casa. Hoje são de que operadora?", "scriptVersion": COMPARA_SCRIPT_VERSION}
     customer_name = _clean(metadata.get("name"), 100)
     source = _clean(metadata.get("source"), 80).lower().replace("_", "-")
     is_sd_dialer_call = source in {"sd-dialer", "sd-dialer-manual"}
