@@ -206,8 +206,8 @@ qualificação de contactos e ferramentas à medida.
         ("PRODUTO / SERVIÇO", _clean(profile.get("product"), 1200)),
         ("OFERTA / CONDIÇÕES AUTORIZADAS", _clean(profile.get("offer"), 1200)),
         ("ABERTURA PRETENDIDA", _clean(profile.get("opening"), 800)),
-        ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), 1800)),
-        ("NOTAS DA EMPRESA", _clean(profile.get("notes"), 2200)),
+        ("OBJEÇÕES E RESPOSTAS AUTORIZADAS", _clean(profile.get("objections"), 4000)),
+        ("NOTAS DA EMPRESA", _clean(profile.get("notes"), 30000)),
         ("TOM", _tone_without_voice_tag(profile)),
     ]
     context = "\n".join(f"{title}:\n{text}" for title, text in sections if text)
