@@ -178,6 +178,29 @@ class SupabaseLogger:
             logger.exception("Falha a atualizar voice_calls id=%s", call_id)
             return False
 
+    async def get_call_status(self, call_id: str) -> str | None:
+        try:
+            r = await self._client.get("/rest/v1/voice_calls", params={"id": f"eq.{call_id}", "select": "status"})
+            r.raise_for_status()
+            rows = r.json()
+            return str(rows[0].get("status")) if rows else None
+        except Exception:
+            logger.exception("Falha a ler status de voice_calls id=%s", call_id)
+            return None
+
+    async def has_client_transcript(self, call_id: str) -> bool | None:
+        """True/False se há (ou não) pelo menos uma linha do cliente; None se não foi possível saber."""
+        try:
+            r = await self._client.get(
+                "/rest/v1/voice_call_transcripts",
+                params={"call_id": f"eq.{call_id}", "speaker": "eq.client", "select": "id", "limit": "1"},
+            )
+            r.raise_for_status()
+            return bool(r.json())
+        except Exception:
+            logger.exception("Falha a ler transcricoes de call_id=%s", call_id)
+            return None
+
     async def log_event(self, call_id: str, event_type: str, payload: dict):
         try:
             r = await self._client.get("/rest/v1/voice_calls", params={"id": f"eq.{call_id}", "select": "company_id"})

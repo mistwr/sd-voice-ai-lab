@@ -89,6 +89,19 @@ def prewarm(proc: JobProcess) -> None:
         logger.warning("Piper prewarm unavailable; neural voice can still start", exc_info=True)
 
 
+# Caracteres não latinos (CJK, kana, hangul, formas de largura total) que o LLM às vezes
+# deixa escapar (ex.: "彩神争霸app"). São retirados só do texto que vai para a voz.
+_NON_LATIN_SPEECH_RE = re.compile(
+    "[\u2E80-\u2FFF\u3000-\u303F\u3040-\u30FF\u3100-\u31FF\u3200-\u9FFF"
+    "\uA960-\uA97F\uAC00-\uD7FF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF"
+    "\U00020000-\U0003134F]+"
+)
+
+
+def _strip_non_latin_for_speech(text: str) -> str:
+    return _NON_LATIN_SPEECH_RE.sub("", text)
+
+
 def _clean(value: Any, limit: int = 1800) -> str:
     if value is None:
         return ""
@@ -407,6 +420,15 @@ class LuminAgent(Agent):
             )
             return self._follow_up_confirmation
 
+    def tts_node(self, text, model_settings):
+        async def _speech_safe_text():
+            async for chunk in text:
+                cleaned = _strip_non_latin_for_speech(chunk)
+                if cleaned:
+                    yield cleaned
+
+        return Agent.default.tts_node(self, _speech_safe_text(), model_settings)
+
     async def _wait_until_answered(self, timeout: float = 90.0) -> None:
         """Espera que a chamada SIP seja atendida (sip.callStatus=active).
 
@@ -723,12 +745,26 @@ async def entrypoint(ctx: JobContext):
         if voice_call_logger is not None:
             ended_at = datetime.now(timezone.utc)
             duration_seconds = max(0, int((ended_at - call_started_at).total_seconds()))
-            await voice_call_logger.update_call(
-                call_id,
-                status="answered",
-                ended_at=ended_at.isoformat(),
-                duration_seconds=duration_seconds,
-            )
+            current_status = await voice_call_logger.get_call_status(call_id)
+            if current_status in {"failed", "voicemail"}:
+                # Já foi fechada como não atendida / correio de voz: não sobrescrever.
+                pass
+            elif await voice_call_logger.has_client_transcript(call_id) is False:
+                # Nenhuma frase do cliente = ninguém atendeu (ou só tocou). Não conta minutos.
+                await voice_call_logger.update_call(
+                    call_id,
+                    status="failed",
+                    error_message="Não atendeu.",
+                    ended_at=ended_at.isoformat(),
+                    duration_seconds=0,
+                )
+            else:
+                await voice_call_logger.update_call(
+                    call_id,
+                    status="answered",
+                    ended_at=ended_at.isoformat(),
+                    duration_seconds=duration_seconds,
+                )
             await voice_call_logger.close()
 
     ctx.add_shutdown_callback(_finalize_call)
