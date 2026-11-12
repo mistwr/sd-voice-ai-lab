@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, TurnHandlingOptions, WorkerOptions, cli, function_tool, inference
+from livekit import rtc
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, RunContext, StopResponse, TurnHandlingOptions, WorkerOptions, cli, function_tool, get_job_context, inference
 
 try:
     from piper_tts import PiperTTS
@@ -109,13 +110,13 @@ def _tone_without_voice_tag(profile: dict[str, Any]) -> str:
 
 
 # Keep the Compara+ call short, personal and focused on booking a useful next step.
-COMPARA_SCRIPT_VERSION = 7
+COMPARA_SCRIPT_VERSION = 9
 COMPARA_RESTORED_SCRIPT = {
     "id": "lumin-telecom",
     "name": "Lumin",
     "description": "Lumin é o assistente virtual da Compara+. Conversa de forma breve e natural, percebe o que a pessoa gostaria de melhorar e encaminha o interesse para um consultor.",
     "objective": "Perceber a necessidade principal e, havendo interesse, agendar um contacto com um consultor para comparar opções de internet e televisão.",
-    "opening": "Boa tarde, [nome]. Sou o Lumin, assistente virtual da Compara+. O que gostava de melhorar na sua internet?",
+    "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Muita gente paga a mais sem saber, e posso ajudar a comparar e a poupar. A sua internet e TV são de que operadora?",
     "product": "A Compara+ compara opções residenciais de internet e televisão. Não inventes preços, cobertura, poupanças ou condições. Ouve a necessidade concreta e oferece uma comparação com um consultor, sem compromisso.",
     "offer": "Quando a pessoa mostrar uma necessidade ou interesse, oferece um contacto com um consultor para comparar opções. Não prometas poupança, preço, cobertura ou mudança de operador.",
     "objections": "RECUSA CLARA: agradece e termina sem insistir. SATISFEITO: reconhece e oferece uma comparação sem compromisso uma única vez; se não quiser, termina. PEDIDO PARA NÃO VOLTAR A CONTACTAR: confirma brevemente e termina.",
@@ -334,6 +335,9 @@ class LuminAgent(Agent):
         self._follow_up_requested_by = follow_up_requested_by
         self._follow_up_lock = asyncio.Lock()
         self._follow_up_confirmation = ""
+        # Abertura: só fala depois de o cliente atender e de dizer "Estou?".
+        self._greeted = False
+        self._first_user_turn = asyncio.Event()
 
         follow_up_enabled = bool(
             follow_up_logger
@@ -403,11 +407,70 @@ class LuminAgent(Agent):
             )
             return self._follow_up_confirmation
 
+    async def _wait_until_answered(self, timeout: float = 90.0) -> None:
+        """Espera que a chamada SIP seja atendida (sip.callStatus=active).
+
+        Sessões web (sem participante SIP) seguem logo. Nunca lança erro.
+        """
+        try:
+            room = get_job_context().room
+        except Exception:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        non_sip_since: float | None = None
+        while loop.time() < deadline:
+            participants = list(room.remote_participants.values())
+            sip = [p for p in participants if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
+            if sip:
+                status = str(sip[0].attributes.get("sip.callStatus", "") or "")
+                if status in ("", "active", "hangup"):
+                    return
+            elif participants:
+                if non_sip_since is None:
+                    non_sip_since = loop.time()
+                elif loop.time() - non_sip_since > 1.0:
+                    return
+            await asyncio.sleep(0.2)
+        logger.warning("call not answered before greeting timeout")
+
+    async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
+        # Antes e durante a abertura ("Estou?", "Sim?", "Quem fala?") não se
+        # gera resposta: a abertura já responde a isso. Evita o agente cortar-se
+        # e recomeçar a apresentação 8-9 s depois.
+        if not self._greeted:
+            self._first_user_turn.set()
+            # Guarda o que se ouviu antes da abertura ("Estou?" ou a mensagem do gravador).
+            # Sem isto o correio de voz não era detetado e o robot ficava 5 min no gravador.
+            text_value = _clean(getattr(new_message, "text_content", None) or "", 4000)
+            if text_value and self._follow_up_logger is not None and self._follow_up_call_id and self._follow_up_company_id:
+                try:
+                    await self._follow_up_logger.log_transcript(
+                        self._follow_up_call_id, "client", text_value, company_id=self._follow_up_company_id,
+                    )
+                except Exception:
+                    logger.warning("pre-greeting transcript not saved")
+            raise StopResponse()
+
     async def on_enter(self):
-        await self.session.say(
-            build_greeting(self._profile, self._customer_name),
-            allow_interruptions=True,
-        )
+        await self._wait_until_answered()
+        # Dá ao cliente um instante para dizer "Estou?" antes de falar por cima.
+        try:
+            await asyncio.wait_for(self._first_user_turn.wait(), timeout=1.5)
+        except asyncio.TimeoutError:
+            pass
+        # Se ainda estiver a falar, espera que acabe (máx. 2 s).
+        for _ in range(10):
+            if getattr(self.session, "user_state", "") != "speaking":
+                break
+            await asyncio.sleep(0.2)
+        try:
+            await self.session.say(
+                build_greeting(self._profile, self._customer_name),
+                allow_interruptions=False,
+            )
+        finally:
+            self._greeted = True
 
 async def entrypoint(ctx: JobContext):
     metadata: dict[str, Any] = {}
@@ -417,6 +480,14 @@ async def entrypoint(ctx: JobContext):
         pass
 
     profile = metadata.get("agentProfile") or {}
+    if not isinstance(profile, dict) or not profile:
+        profile = {"id": "compara-plus-telecom-ricardo", "name": "Ricardo Salgado", "company": "Compara +", "voice": "natural", "voiceEngine": "xai", "opening": "Boa tarde! Sou o Ricardo Salgado. Posso fazer-lhe três perguntas rápidas sobre os seus serviços de telecomunicações?"}
+    elif profile.get("id") == "compara-plus-telecom-ricardo":
+        profile = {**profile, "voice": "natural", "voiceEngine": "xai"}
+    # Isolated Compara+ lab: keep the recovered voice/turn-taking, but consistently
+    # introduce the agent as Ricardo Salgado regardless of incoming campaign metadata.
+    profile = _campaign_profile(profile)
+    profile = {**profile, "name": "Ricardo Salgado", "company": "Compara+", "opening": "Boa tarde! Sou o Ricardo, assistente virtual da Compara+. Muita gente paga a mais sem saber, e posso ajudar a comparar e a poupar. A sua internet e TV são de que operadora?", "scriptVersion": COMPARA_SCRIPT_VERSION}
     customer_name = _clean(metadata.get("name"), 100)
     source = _clean(metadata.get("source"), 80).lower().replace("_", "-")
     is_sd_dialer_call = source in {"sd-dialer", "sd-dialer-manual"}
